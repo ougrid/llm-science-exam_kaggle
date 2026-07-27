@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.python-version
+*.egg-info/
+
+# Data and large artifacts — these live in Kaggle Datasets, not git
+data/
+wheels/
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+*.parquet
+*.faiss
+*.index
+
+# Credentials
+.env
+.kaggle/
+kaggle.json
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
