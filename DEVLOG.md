@@ -219,14 +219,25 @@ invalid or inconclusive run (7 of them across today) is logged in
 `experiments/log.csv` with a `notes` field, not deleted — the full
 per-epoch trace for run 8 is in that file's notes column.
 
-**Handoff for the next session**: check hypothesis 2 first (cheap, a few
-lines — just print the actual tokenized length distribution of
-`train_pool.csv` under the closed-book format and compare to 256), then
-hypothesis 1 (try a non-empty placeholder first segment, or check whether
-HF's multiple-choice examples for other encoders conventionally leave the
-first segment empty for context-free tasks), then hypothesis 3 only if 1
-and 2 are ruled out (would mean pulling in `cdeotte`'s larger pools before
-concluding the model architecture/data volume itself is the limit).
+**Hypothesis 2 checked and ruled out.** The mechanism is real: an empty
+first segment plus `truncation="only_first"` genuinely raises `Truncation
+error: Sequence to truncate too short to respect the provided max_length`
+when the second segment alone exceeds `max_length` — verified directly.
+But it never fires on this data. Computed the actual token-length
+distribution of all 24,910 real prompt+option choices in `train_pool.csv`
+with `truncation=False`: median 33 tokens, max 145, **zero rows exceed
+256**. These closed-book inputs are short — mostly just
+`[CLS][SEP]question option[SEP]` — nowhere near the cap. Not the cause of
+the no-learning result. (Side note, not a bug: median 33 vs
+`MAX_LENGTH=256` means most of every batch is padding — worth remembering
+for throughput later, irrelevant to correctness now.)
+
+**Handoff for the next session**: hypothesis 1 next (try a non-empty
+placeholder first segment, or check whether HF's multiple-choice examples
+for other encoders conventionally leave the first segment empty for
+context-free tasks), then hypothesis 3 only if 1 is also ruled out (would
+mean pulling in `cdeotte`'s larger pools before concluding the model
+architecture/data volume itself is the limit).
 
 **The lesson worth stating out loud in the interview**: reduced precision
 (bf16) was premature optimization on a 184M-parameter model with no real
