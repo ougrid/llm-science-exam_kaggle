@@ -5,6 +5,8 @@ requires-python = "==3.11.*"
 dependencies = [
     "numpy>=1.26",
     "kaggle>=2.2",
+    "pandas>=2.2",
+    "pyarrow>=17.0",
 ]
 
 [dependency-groups]
