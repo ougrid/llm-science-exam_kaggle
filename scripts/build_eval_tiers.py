@@ -41,6 +41,14 @@ def main() -> None:
     t1.to_csv(DATA / "t1_dev.csv", index=False)
     print(f"T1 dev: {len(t1)} rows -> data/t1_dev.csv")
 
+    # Train pool = clean pool minus whatever was sampled into T1. Training on
+    # the unsplit pool would put T1 rows in the training set too, silently
+    # invalidating T1 as a held-out selection set.
+    clean = pool.loc[~dup_mask].drop_duplicates(subset="prompt")
+    train_pool = clean[~clean["prompt"].isin(t1["prompt"])].reset_index(drop=True)
+    train_pool.to_csv(DATA / "train_pool.csv", index=False)
+    print(f"train pool (clean, minus T1): {len(train_pool)} rows -> data/train_pool.csv")
+
     arc_raw = pd.read_parquet(DATA / "ood_raw/arc_challenge_test.parquet")
     mmlu_raw = pd.read_parquet(DATA / "ood_raw/mmlu_all_test.parquet")
     arc_norm = normalize_arc(arc_raw)
