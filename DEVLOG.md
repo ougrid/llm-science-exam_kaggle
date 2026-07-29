@@ -232,12 +232,51 @@ the no-learning result. (Side note, not a bug: median 33 vs
 `MAX_LENGTH=256` means most of every batch is padding — worth remembering
 for throughput later, irrelevant to correctness now.)
 
-**Handoff for the next session**: hypothesis 1 next (try a non-empty
-placeholder first segment, or check whether HF's multiple-choice examples
-for other encoders conventionally leave the first segment empty for
-context-free tasks), then hypothesis 3 only if 1 is also ruled out (would
-mean pulling in `cdeotte`'s larger pools before concluding the model
-architecture/data volume itself is the limit).
+**Hypothesis 1 checked, and it directly led to the actual root cause.**
+Compared the current empty-first-segment format against the standard
+two-segment MC format (`prompt` as first, `option` alone as second) on a
+600-row subset, 5 epochs, per-epoch eval. Both formats showed the *same*
+pattern, ruling out the input format as the cause: T1 MAP@3 jumped to
+**0.5556 / 0.5600** (format A / B) after just epoch 1 — far above anything
+seen all night, close to `PLAN.md`'s expected ~0.58 — then **degraded back
+toward baseline** over epochs 2-5 (down to 0.365-0.381).
+
+That planted the real question: why did the full 8-epoch/4982-row run
+never show this spike at all? Re-ran the full dataset with a short
+2-epoch schedule and **mid-epoch** checkpoints (every 25% of an epoch,
+not just at epoch boundaries) to get finer resolution:
+
+```
+epoch 0 (pre-train)  T1 MAP@3 0.3794
+epoch 1 @ 25%         T1 MAP@3 0.5061   <- the peak
+epoch 1 @ 50%         T1 MAP@3 0.3727   <- already collapsed
+epoch 1 @ 75%         T1 MAP@3 0.3591
+epoch 1 @ 100%        T1 MAP@3 0.3812
+epoch 2 @ 25-100%     T1 MAP@3 0.376-0.382 (flat near baseline)
+```
+
+**Root cause, now clear**: the model genuinely learns a real, strong
+signal very quickly (within the first ~38 optimizer steps, ~25% of a
+single epoch) and then destabilizes and collapses back toward baseline
+almost as fast — all *within* the granularity of a single epoch. Every
+prior run tonight evaluated only at epoch boundaries, so every single one
+of them measured the model *after* the collapse had already happened,
+making it look like "no learning ever occurred" when in fact learning
+happened and was then lost, invisibly, between checkpoints. This is not a
+bug in the training code — it's a real optimization-dynamics finding
+(the model overshoots past a good optimum and doesn't recover at this
+LR/schedule), and the fix is standard: evaluate frequently and keep the
+best checkpoint by validation score, rather than only the final one. This
+is different from the best-of-N-configs cherry-picking `PLAN.md` warns
+against — it's early-stopping / best-checkpoint selection within a single
+run's own trajectory, exactly what `Trainer(load_best_model_at_end=True)`
+does by default.
+
+**Next**: rewrite `train_closed_book.py` to evaluate every N optimizer
+steps (not just per-epoch) and track+save the best checkpoint by T1
+MAP@3, and report *that* number — with its CI — as the actual closed-book
+baseline, rather than the collapsed end-of-training state this whole
+debugging trail was chasing all night.
 
 **The lesson worth stating out loud in the interview**: reduced precision
 (bf16) was premature optimization on a 184M-parameter model with no real
@@ -248,6 +287,84 @@ per-epoch tracking) rather than accept or reject a result on the loss
 curve's appearance alone — and the honest ending to a debugging session is
 sometimes "here are three ruled-in hypotheses and zero ruled-out ones,"
 not a clean resolution manufactured to have a tidy story before stopping.
+
+### Closed-book baseline: the fix works, but it uncovers a lexical shortcut
+
+Reran `train_closed_book.py` with the best-checkpoint fix (eval every 10
+optimizer steps, save whenever T1 MAP@3 improves). Result, on the full
+4982-row `train_pool`, 3 epochs:
+
+- **Best checkpoint**: optim_step 30 of 465 (still inside the 46-step
+  warmup) — T1 MAP@3 **0.5641 [0.5439, 0.5840]**.
+- **Final (end-of-training) checkpoint**: T1 MAP@3 0.3830 [0.3640, 0.4021]
+  — collapsed back to baseline, exactly like every prior run.
+
+This confirms the root cause found earlier tonight: a real, sharp spike
+almost immediately after training starts, followed by collapse to a noise
+floor for the remaining ~94% of training. Per-epoch mean loss stays
+essentially flat at ln(5)=1.609 throughout (1.6169 → 1.6151 → 1.6108), so
+the collapse is invisible in the loss curve — only per-step MAP@3
+tracking exposes it.
+
+Before accepting 0.5641 as "the" Day-1 closed-book number, two concerns
+needed checking:
+
+1. **Selection bias.** The best checkpoint was chosen by evaluating T1
+   ~46 times and taking the max — the same "best-of-N" optimism
+   `PLAN.md` warns about, just within one run's trajectory instead of
+   across configs. Worth flagging, though the observed gap over baseline
+   (+0.197) is far larger than that bias alone could produce.
+2. **Whether the spike is a shortcut, not knowledge.** The spike lands
+   *during warmup*, before the model has seen much data, and `train_pool`
+   / T1 are the same synthetic generation process — ripe conditions for a
+   shared surface artifact rather than real learning. `PLAN.md` already
+   names this exact risk as the Day-1 "options-only bias probe," not yet
+   run tonight.
+
+Ran the cheapest possible version of that probe: **no model, no
+training** — just rank the five options by raw character length, longest
+first, and score that against the true labels.
+
+```
+T1          MAP@3 0.4780 [0.4577, 0.4989]   (random baseline 0.3667)
+train_pool  MAP@3 0.4783 [0.4673, 0.4897]
+mean option length: correct 77.8-79.2 chars, incorrect 71.7-72.9 chars
+answer-letter distribution: ~19-21% each (uniform -- not a positional bias)
+```
+
+**A zero-parameter length heuristic beats the fine-tuned model's
+converged end-state (0.3830).** This is the sharper way to say it: three
+epochs of fine-tuning don't just fail to learn — they actively destroy a
+signal a dumb heuristic gets for free, without replacing it with
+anything. The GPT-3.5-generated correct answers in this pool are
+systematically longer and more hedged than the distractors it generates
+alongside them, and that is enough on its own to clear the random
+baseline by 30%.
+
+**Reframing, honestly:** the transient 0.5641 spike very plausibly
+reflects the model rapidly latching onto length-correlated token-count
+features in the first few dozen steps, before optimizer dynamics move it
+away from that shortcut and into a region that has learned nothing to
+replace it with. This doesn't mean 0.5641 is invalid as a
+checkpoint-selection result — it means it cannot be reported as a clean
+"closed-book science knowledge" number without this caveat attached. Both
+findings are logged in `experiments/log.csv` (rows `..._BEST-CKPT` and
+`diagnostic_only_longest_option_heuristic_no_training`), with the second
+row's notes explicitly cross-referencing the first.
+
+**Why this is a good finding, not a bad one, for the interview
+narrative**: quantifying a benchmark's own shortcut, and showing that
+your model partially/possibly rides that shortcut rather than transcends
+it, is exactly the kind of senior-level scrutiny `PLAN.md`'s validation
+section was designed to produce. The honest headline for Day 1 is not
+"closed-book DeBERTa reaches 0.56" — it's "closed-book DeBERTa's best
+checkpoint reaches 0.56, but at least 0.48 of the gap over random is
+explained by a length artifact in the benchmark's own generation process,
+and the model's converged state doesn't even clear that artifact." Open
+decision, not yet made: whether to build a length-debiased eval variant
+to isolate any non-length-driven signal, or treat this as sufficient
+Day-1 characterization and move to Day 2 retrieval, where real passage
+context should swamp the artifact either way.
 
 ---
 
