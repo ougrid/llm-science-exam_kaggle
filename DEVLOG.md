@@ -161,16 +161,82 @@ against direct evidence before moving on.**
    the 4e-6 to 8e-7 range `PLAN.md` cites from the 10th-place solution
    repo), `eps=1e-6`, gradient accumulation to reach their effective batch
    of 32, 3 epochs (bumped from 2 since the larger effective batch means
-   fewer optimizer steps per epoch). **Result pending** — training in
-   progress as of this entry; see `experiments/log.csv` for the outcome.
+   fewer optimizer steps per epoch). Result: no crash, loss trend only
+   marginally downward (1.6169 -> 1.6157 -> 1.6132), T1 MAP@3 = 0.3888 with
+   a 95% CI of [0.3698, 0.4076] — the lower bound clears the 0.3667 random
+   baseline, but only by 0.0031. Too thin a margin to accept at face value
+   given everything above.
+8. **Added per-epoch T1 evaluation and re-ran at 8 epochs** specifically to
+   settle whether run 7 was undertrained (and would keep improving) or
+   capped (and would plateau or stay flat). Neither turned out to be quite
+   right — **there is no learning signal at all**. Per-epoch loss means
+   oscillate randomly around ln(5)=1.6094 with no trend across all 8
+   epochs (1.6088 / 1.6140 / 1.6275 / 1.6172 / 1.6145 / 1.6115 / 1.6117 /
+   1.6106), and per-epoch T1 MAP@3 bounces between 0.353 and 0.386,
+   sometimes *below* the random baseline. Run 7's CI-barely-clears-baseline
+   result was almost certainly a statistical fluke, not real signal — this
+   longer, better-instrumented run makes that clear.
+
+### Where the closed-book baseline stands: unresolved, not failed
+
+This is a genuine open problem, not something to paper over. What's
+**confirmed**, independent of the score itself:
+- Training mechanics are sound: gradients demonstrably flow (direct
+  weight-diff check on both the classifier head and an encoder layer, run
+  4/5's diagnostic), no NaN across a full 8-epoch run, `eps=1e-6` and
+  `lr=5e-6` are both independently validated as numerically stable in
+  isolation.
+- The absolute result (~0.38, statistically indistinguishable from the
+  0.3667 random baseline) is real below `PLAN.md`'s own predicted ~0.58 for
+  this exact model/config, by a wide enough margin that "just needs more
+  epochs" has now been directly tested and ruled out.
+
+**Three hypotheses, none tested yet — this is the actual next step, not a
+concluded finding**:
+1. The closed-book input format passes an *empty* first segment
+   (`context=""`) into `tokenizer(first, second, ...)`, producing
+   `[CLS][SEP]prompt+option[SEP]` — a degenerate structure a pretrained
+   encoder that expects two populated segments may not handle well.
+2. `truncation="only_first"` with an empty first segment may not actually
+   be able to truncate anything (there's nothing in the first segment to
+   cut), so unusually long `prompt+option` pairs could be silently passing
+   through **longer** than `MAX_LENGTH=256` rather than being truncated —
+   worth directly checking token length distributions against the cap.
+3. 4982 training rows, each about a different, unrelated Wikipedia STEM
+   topic, may simply be too little repeated signal for a 184M-parameter
+   model to generalize from with *zero* context — unlike a task like
+   sentiment classification where the same cues recur across examples, and
+   more directly relevant to `PLAN.md`'s own core thesis: retrieval matters
+   more than closed-book performance, so this closed-book number may
+   matter less than it currently seems to.
+
+**Decision: stopping here for tonight rather than pushing the
+`deberta-v3-large` run to Kaggle.** The account has a scarce 6-hour/week
+GPU quota (see Day-1 quota-correction entry above); pushing a large-model
+training run against an undiagnosed problem in the smaller model risks
+burning a meaningful fraction of that budget on the same issue. Every
+invalid or inconclusive run (7 of them across today) is logged in
+`experiments/log.csv` with a `notes` field, not deleted — the full
+per-epoch trace for run 8 is in that file's notes column.
+
+**Handoff for the next session**: check hypothesis 2 first (cheap, a few
+lines — just print the actual tokenized length distribution of
+`train_pool.csv` under the closed-book format and compare to 256), then
+hypothesis 1 (try a non-empty placeholder first segment, or check whether
+HF's multiple-choice examples for other encoders conventionally leave the
+first segment empty for context-free tasks), then hypothesis 3 only if 1
+and 2 are ruled out (would mean pulling in `cdeotte`'s larger pools before
+concluding the model architecture/data volume itself is the limit).
 
 **The lesson worth stating out loud in the interview**: reduced precision
 (bf16) was premature optimization on a 184M-parameter model with no real
 memory pressure on 8GB VRAM — it cost two broken runs and zero benefit.
-And a flat or NaN loss, or a suspiciously-clean number, is a prompt to
-verify directly (weight diffs, isolated synthetic batches, checkpoint
-inspection) rather than to accept or reject a result on the loss curve's
-appearance alone.
+A flat or NaN loss, or a suspiciously-clean number, is a prompt to verify
+directly (weight diffs, isolated synthetic batches, checkpoint inspection,
+per-epoch tracking) rather than accept or reject a result on the loss
+curve's appearance alone — and the honest ending to a debugging session is
+sometimes "here are three ruled-in hypotheses and zero ruled-out ones,"
+not a clean resolution manufactured to have a tidy story before stopping.
 
 ---
 

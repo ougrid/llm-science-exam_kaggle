@@ -30,7 +30,7 @@ MAX_LENGTH = 256
 BATCH_SIZE = 8
 GRAD_ACCUM_STEPS = 4  # effective batch 32, matching PLAN.md's cited community recipe
 EVAL_BATCH_SIZE = 16
-EPOCHS = 3  # bumped from 2: larger effective batch means fewer optimizer steps/epoch
+EPOCHS = 8  # generous on purpose: eval every epoch to see whether this is undertrained
 LR = 5e-6  # low end of PLAN.md's cited 4e-6-8e-7 range; uniform, see note below
 SEED = 42
 
@@ -69,6 +69,28 @@ def log_experiment(row: dict) -> None:
         if is_new:
             writer.writeheader()
         writer.writerow(row)
+
+
+def evaluate(model, tokenizer, df, collator, device) -> tuple[float, float, float, float]:
+    """Return (map3_mean, ci_lower, ci_upper, seconds) on `df`."""
+    model.eval()
+    ds = MultipleChoiceDataset(df, tokenizer, max_length=MAX_LENGTH)
+    loader = DataLoader(ds, batch_size=EVAL_BATCH_SIZE, shuffle=False, collate_fn=collator)
+    all_logits = []
+    start = time.time()
+    with torch.no_grad():
+        for batch in loader:
+            batch = {k: v.to(device) for k, v in batch.items()}
+            outputs = model(**batch)
+            all_logits.append(outputs.logits.float().cpu().numpy())
+    seconds = time.time() - start
+    logits = np.concatenate(all_logits, axis=0)
+    y_true = df["answer"].tolist()
+    y_pred = logits_to_ranked_labels(logits, k=3)
+    scores = average_precision_scores(y_true, y_pred, k=3)
+    mean, lower, upper = bootstrap_ci(scores, n_resamples=10_000, seed=0)
+    model.train()
+    return mean, lower, upper, seconds
 
 
 def main() -> None:
@@ -145,6 +167,9 @@ def main() -> None:
             if step % 100 == 0:
                 print(f"epoch {epoch + 1} step {step}/{len(train_loader)} loss {loss.item():.4f}")
         print(f"epoch {epoch + 1}/{EPOCHS} mean loss: {total_loss / len(train_loader):.4f}")
+
+        mean, lower, upper, _ = evaluate(model, tokenizer, t1_df, collator, device)
+        print(f"  -> T1 MAP@3 after epoch {epoch + 1}: {mean:.4f}  95% CI [{lower:.4f}, {upper:.4f}]")
     train_seconds = time.time() - train_start
     print(f"training took {train_seconds:.1f}s")
 
@@ -152,34 +177,18 @@ def main() -> None:
     model.save_pretrained(CHECKPOINT_DIR)
     tokenizer.save_pretrained(CHECKPOINT_DIR)
 
-    # --- Evaluate on T1 ---
-    model.eval()
-    eval_ds = MultipleChoiceDataset(t1_df, tokenizer, max_length=MAX_LENGTH)
-    eval_loader = DataLoader(eval_ds, batch_size=EVAL_BATCH_SIZE, shuffle=False, collate_fn=collator)
-
-    all_logits = []
-    eval_start = time.time()
-    with torch.no_grad():
-        for batch in eval_loader:
-            batch = {k: v.to(device) for k, v in batch.items()}
-            outputs = model(**batch)
-            all_logits.append(outputs.logits.float().cpu().numpy())
-    eval_seconds = time.time() - eval_start
-    logits = np.concatenate(all_logits, axis=0)
-
-    y_true = t1_df["answer"].tolist()
-    y_pred = logits_to_ranked_labels(logits, k=3)
-    scores = average_precision_scores(y_true, y_pred, k=3)
-    mean, lower, upper = bootstrap_ci(scores, n_resamples=10_000, seed=0)
+    # Final report uses the last epoch's number -- no picking the best epoch
+    # after the fact, that's exactly the best-of-N optimism PLAN.md warns
+    # about even at N as small as 8.
+    mean, lower, upper, eval_seconds = evaluate(model, tokenizer, t1_df, collator, device)
     baseline = random_baseline_map_at_k()
-
-    print(f"T1 MAP@3: {mean:.4f}  95% CI [{lower:.4f}, {upper:.4f}]  (random baseline {baseline:.4f})")
+    print(f"FINAL T1 MAP@3: {mean:.4f}  95% CI [{lower:.4f}, {upper:.4f}]  (random baseline {baseline:.4f})")
 
     log_experiment(
         {
             "date": pd.Timestamp.now().isoformat(timespec="seconds"),
             "git_sha": git_sha(),
-            "config": "deberta-v3-base_closed-book_maxlen256_3ep_lr5e-6_eps1e-6_accum4",
+            "config": f"deberta-v3-base_closed-book_maxlen256_{EPOCHS}ep_lr5e-6_eps1e-6_accum4",
             "tier": "T1",
             "n": len(t1_df),
             "map3_mean": round(mean, 4),
