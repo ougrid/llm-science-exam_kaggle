@@ -1,0 +1,11 @@
+{
+  "id": "ougridd/day-1-dummy-baseline-llm-science-exam",
+  "title": "Day 1 dummy baseline - LLM Science Exam",
+  "code_file": "script.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": false,
+  "competition_sources": ["kaggle-llm-science-exam"]
+}
