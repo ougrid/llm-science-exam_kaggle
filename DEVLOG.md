@@ -805,6 +805,50 @@ arrived at through today's actual pace instead of assumed in advance.
 Full reasoning recorded in `PLAN.md`'s Day 3 section under "today's
 compressed execution plan" so the two documents don't drift.
 
+## Day 3 — execution (full autonomy granted)
+
+User handed off full responsibility and stepped away, asking to be able to
+check progress from a phone (GitHub for commits, Kaggle for the live
+training run). Proceeded through the reordered plan:
+
+**Full corpus scale-up was much faster than estimated.** Chunking all
+2,101,279 paragraph rows (→ 2,345,229 chunks across ~276k articles) took
+**49 seconds**, not the 45-90 minutes budgeted. Building the BM25 index
+over all 2.34M chunks took another 143 seconds, with one real scare: RSS
+peaked at ~9.8 GB during tokenization (15 GiB machine, ~3.9 GB "available"
+at the low point) before settling back to 6.7 GB once indexing finished --
+worth knowing for next time, but it didn't actually OOM.
+
+**A genuine operational mistake, caught and fixed.** Attaching context to
+train_pool/T1 via the new full-corpus index seemed to die silently (no
+error, process gone) on the first attempt -- diagnosed as a likely OOM and
+relaunched. It turned out the *first* attempt was still alive the whole
+time (a `pgrep` check gave a false negative), so the "fix" actually
+launched a second, fully redundant process alongside the first, and the
+two together pushed memory to a real edge (876 MB free). Caught via `ps
+aux` showing two matching PIDs, not by anything failing loudly. Killed the
+redundant second process; the first had in fact already completed
+successfully. Lesson: a silent, ambiguous failure (no error, no obvious
+completion) deserves direct verification (`ps aux`, not just a `pgrep`
+pattern that can transiently miss) before concluding it died and retrying
+-- retrying blind on an ambiguous signal is exactly how you end up running
+the same expensive job twice by accident.
+
+**Retrieval eval harness (Day 3 item 1) results, run concurrently with
+kicking off the full-corpus retraining on Kaggle** (full numbers and
+caveats in `reports/retrieval_eval.md`): T1 recall@5 = 0.481, recall@100 =
+0.711 (plateaus well short of 1.0 -- real retrieval misses plus proxy
+limitations, both named rather than hidden). T3-OOD recall@100 = 0.588,
+notably lower than T1's despite similar recall@1 -- a real, measured
+distribution shift between GPT-3.5-generated and human-written questions,
+exactly what T3 was built to catch. Oracle-context ceiling and the 2×2
+failure decomposition still need the trained reader's predictions --
+pending the Kaggle run.
+
+Full-corpus retraining kicked off on Kaggle (same kernel, new dataset
+version with the full-corpus context replacing the 20k-slice pilot data,
+same filenames so `script.py` needed no changes). Result pending.
+
 ---
 
 <!-- Append new entries above this line as work continues. -->

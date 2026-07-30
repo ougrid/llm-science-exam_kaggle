@@ -20,6 +20,7 @@ Run once from the repo root: `python scripts/build_own_retrieval_context.py`
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pandas as pd
@@ -27,7 +28,6 @@ import pandas as pd
 from llmsci.retrieve.sparse import BM25Index, build_query
 
 DATA = Path("data")
-INDEX_DIR = DATA / "bm25_index_20k"
 TOP_K = 5
 OPTION_COLUMNS = ["A", "B", "C", "D", "E"]
 
@@ -41,8 +41,14 @@ def attach_context(df: pd.DataFrame, index: BM25Index, chunks: pd.DataFrame) -> 
 
 
 def main() -> None:
-    chunks = pd.read_parquet(INDEX_DIR / "chunk_texts.parquet")
-    index = BM25Index.load(INDEX_DIR, chunks["text"].tolist())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--index-dir", default="bm25_index_full", help="index dir name under data/")
+    parser.add_argument("--suffix", default="full", help="output filename suffix, e.g. train_pool_own_context_<suffix>.parquet")
+    args = parser.parse_args()
+    index_dir = DATA / args.index_dir
+
+    chunks = pd.read_parquet(index_dir / "chunk_texts.parquet")
+    index = BM25Index.load(index_dir, chunks["text"].tolist())
 
     train_pool = pd.read_csv(DATA / "train_pool.csv")
     t1 = pd.read_csv(DATA / "t1_dev.csv")
@@ -58,10 +64,12 @@ def main() -> None:
     train_pool_own_context = attach_context(train_pool, index, chunks)
     t1_own_context = attach_context(t1, index, chunks)
 
-    train_pool_own_context.to_parquet(DATA / "train_pool_own_context.parquet", index=False)
-    t1_own_context.to_parquet(DATA / "t1_dev_own_context.parquet", index=False)
-    print(f"train_pool_own_context: {len(train_pool_own_context)} rows -> data/train_pool_own_context.parquet")
-    print(f"t1_dev_own_context: {len(t1_own_context)} rows -> data/t1_dev_own_context.parquet")
+    train_out = DATA / f"train_pool_own_context_{args.suffix}.parquet"
+    t1_out = DATA / f"t1_dev_own_context_{args.suffix}.parquet"
+    train_pool_own_context.to_parquet(train_out, index=False)
+    t1_own_context.to_parquet(t1_out, index=False)
+    print(f"train_pool_own_context: {len(train_pool_own_context)} rows -> {train_out}")
+    print(f"t1_dev_own_context: {len(t1_own_context)} rows -> {t1_out}")
     print("example context:", train_pool_own_context["context"].iloc[0][:200])
 
 

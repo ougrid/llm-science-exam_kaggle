@@ -16,6 +16,7 @@ PLAN.md), since questions often reference the article topic only implicitly.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -75,8 +76,14 @@ def slice_by_article_count(ds: Dataset, n_articles: int) -> Dataset:
     return ds.select(keep_idx)
 
 
-def write_chunk_shards(ds: Dataset, out_dir: Path, shard_rows: int = 200_000) -> int:
-    """Stream chunks to parquet shards under `out_dir`. Returns total chunk count."""
+def write_chunk_shards(
+    ds: Dataset, out_dir: Path, shard_rows: int = 200_000, progress_every: int = 200_000
+) -> int:
+    """Stream chunks to parquet shards under `out_dir`. Returns total chunk count.
+
+    Prints progress every `progress_every` source rows -- a silent multi-minute
+    loop over millions of rows is indistinguishable from a hang otherwise.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     schema = pa.schema(
         [
@@ -90,6 +97,7 @@ def write_chunk_shards(ds: Dataset, out_dir: Path, shard_rows: int = 200_000) ->
     buffer: list[dict] = []
     shard_idx = 0
     total = 0
+    start = time.time()
     for chunk in iter_chunks(ds):
         buffer.append(chunk)
         total += 1
@@ -97,6 +105,9 @@ def write_chunk_shards(ds: Dataset, out_dir: Path, shard_rows: int = 200_000) ->
             _write_shard(buffer, out_dir / f"shard-{shard_idx:05d}.parquet", schema)
             shard_idx += 1
             buffer = []
+        if total and total % progress_every == 0:
+            elapsed = time.time() - start
+            print(f"  ...{total} chunks written so far ({elapsed:.0f}s)", flush=True)
     if buffer:
         _write_shard(buffer, out_dir / f"shard-{shard_idx:05d}.parquet", schema)
     return total
