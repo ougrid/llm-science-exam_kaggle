@@ -1,0 +1,19 @@
+{
+  "id": "ougridd/day3-submission-ens",
+  "title": "day3 submission ens",
+  "code_file": "script.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": false,
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "ougridd/llmsci-bm25-index-general",
+    "ougridd/llmsci-offline-wheels",
+    "mgoksu/llm-science-run-context-2",
+    "sandiago21/llm-science-exam-deberta-v3-large-context-3"
+  ],
+  "competition_sources": ["kaggle-llm-science-exam"],
+  "kernel_sources": []
+}

@@ -6,6 +6,8 @@
 
 **What you decided.** Kaggle-first compute (local 8 GB RTX 5050 for glue and fast iteration). Depth you can defend over raw score — a 0.89 you fully own beats a 0.92 you inherited. Plus a breadth layer showing you know what the 2026 stack looks like, not just what won in 2023. You have a Kaggle account but no API token yet.
 
+**Revised 2026-07-30 (final day) — score is now an explicit co-primary goal, not a byproduct.** The original framing treated depth as the deliverable and score as incidental. That was wrong about the *sequence*: a low score is a gate that stops the artifact from ever being read, so the depth never gets presented. The revised objective is **a high score AND the ability to defend every part of it** — in that order of gating, not of importance. Concretely: get the number up, then make sure every number reported is one we measured honestly, with contamination and provenance stated. See "## Final-day score strategy" for the ranked plan. The anti-patterns section still holds in full: a high score obtained by forking a notebook we cannot explain, or by reporting a contaminated number as if it were clean, fails *both* goals at once — it loses the interview on the first probing question. The distinction that makes score-chasing safe here is provenance labelling, not abstinence.
+
 **Time.** You have a few days. So this plan has two tracks: a **4-day core** that produces the complete defensible artifact, and an **extended track** of independent workstreams you can parallelize if you find more time or more machines.
 
 **The framing that makes it work.** This is not a rank-chasing project — the competition is closed, late submissions earn no medal, and the leaderboard is private to you. Frame it as: *a reproduction study of the retrieval-vs-scale question under hard offline constraints, with the retrieval component measured independently of the reader.* Under that framing the 200-row training set stops being an embarrassment and becomes a forcing function for honest statistics.
@@ -198,6 +200,189 @@ writing). Day 1's "correction" over-corrected; **30h/week was right all
 along**, and every "one third of the weekly quota" style estimate
 elsewhere in this document (e.g. under "Local 8 GB vs Kaggle") still holds
 using the original 30h figure.
+
+---
+
+## Final-day score strategy (2026-07-30, ~3.5 h remaining)
+
+Written to be **executable by another engineer or a less capable model without
+further context**: each item states the hypothesis, the exact artifact to
+produce, the command, and the accept/reject rule. Ranked by
+(expected score gain) / (wall-clock hours), highest first.
+
+### The finding that reframes the whole score problem
+
+**The decisive measurement (do this first on any future project of this shape).**
+A public 2023 checkpoint (`mgoksu/llm-science-run-context-2`, a leg of the
+notebook behind the published 0.823761), fed **our own** general-corpus BM25
+top-5 context, scores **MAP@3 0.8592 [0.8200, 0.8958]** on the clean gold 200
+(n=200, baseline 0.3667). It is clean because that checkpoint's public training
+pools have zero prompt overlap with the gold 200
+(`scripts/build_context_train_pool.py` asserts this), and it is a *lower* bound
+because it reads context from a retriever it was never trained against.
+
+**Conclusion: our retrieval is not the bottleneck; our reader is.** The same
+context that yields ~0.43 with our reader yields 0.8592 with a well-trained
+one. Corpus scope, BM25 ranking quality, per-option retrieval, and the
+context-truncation budget are all **second-order** — a strong reader extracts
+0.86 from exactly the context we already produce. Essentially all remaining
+score lives in reader training.
+
+**Reader-training deficits, each measured:**
+
+1. **Starved optimization.** `lr=5e-6` with 10% warmup over 465 optimizer steps
+   gives an effective LR of **1.63e-6** at optimizer step 15 — the step nearly
+   every run selected as "best". Public 0.82–0.86 solutions used ~60k rows × 2
+   epochs at 1e-5–3e-5. Necessary to fix, but **not sufficient on its own**.
+2. **No layer freezing.** The 0.823761 notebook froze embeddings + the first 18
+   of 24 layers (77.2M of 435.1M params trainable), lr 2e-5, effective batch 16.
+   Every run here trained all parameters. On a T4 at batch 2, full-unfreeze
+   `deberta-v3-large` completes only ~420 of 1,226 planned steps inside a
+   75-minute budget.
+3. **Poor calibration.** Training loss sat at ~`ln(5)` = 1.6094 in every run,
+   even where MAP@3 was strongly above baseline — the logits are nearly
+   uniform. Harmless for MAP@3 alone (rank-based) but it blocks ensembling and
+   confidence cascades, which need comparable probabilities.
+4. **Context truncation (second-order).** At `max_length=384` the reader sees a
+   median **26.8%** of its 5-chunk context (median 1,304 tokens); full context
+   fits for **1.0%** of rows (512 → 36.6%, 768 → 56.2%, 1024 → 75.7%). Worth
+   fixing, but the 0.8592 reference used a comparable ~1,750-char budget, so
+   this is not what separates us from 0.86.
+
+**Two invalid inferences I made tonight, recorded so they are not repeated:**
+
+- **`ln(5)` loss is NOT proof of no learning.** MAP@3 depends only on logit
+  *rank order*; cross-entropy on their *magnitudes*. Row 3 had flat `ln(5)`
+  loss and MAP@3 0.5641 — ~25 SE above baseline at n=1,500. This document's own
+  metric section already said so ("monotone rescaling of a *single* model's
+  scores is a no-op for MAP@3"). `ln(5)` means **uncalibrated**, not untrained.
+  Consequently the "learn fast, forget fast" trajectory is **real** and still
+  un-root-caused; my brief withdrawal of it was wrong.
+- **A 64-row overfit test is NOT proof labels are aligned.** Memorization
+  succeeds with scrambled labels too. Labels were validated separately and do
+  hold: longest-option-equals-answer at **32.7%** (train) / **33.3%** (T1) vs
+  20% chance. That check also found **8.8% of training rows carry duplicate
+  option text** — free label noise, absent from T1.
+
+**Process lesson.** Three incompatible root causes were asserted in one
+evening, each with confident arithmetic. The fix is not more rigor per step but
+running the *discriminating* measurement early — here, a known-good reader on
+our own context, which is exactly the "calibration anchor" this plan specified
+on Day 0 and which was deferred repeatedly.
+
+### Ranked plan
+
+**S1 — Retrain with corrected optimization. [RUNNING, highest value]**
+Hypothesis: the reader clears 0.6 once actually trained. Two kernels are live
+as of 20:06 (`kaggle kernels status ougridd/<id>`):
+  - `ougridd/day3-score-push-base` — `deberta-v3-base`, lr **2e-5**, 39,249
+    rows, batch 4 × accum 8, 2 epochs = **2,452 optimizer steps** (~20× the
+    total learning of any prior run).
+  - `ougridd/day3-score-push-large` — `deberta-v3-large`, lr **1e-5**, same
+    data, batch 2 × accum 16, 1 epoch = 1,226 steps.
+Both save the best-by-validation checkpoint continuously and write
+`/kaggle/working/result_summary.txt`, and both carry a `TIME_BUDGET_S` graceful
+stop so a session cut short still yields a usable checkpoint.
+**Accept rule:** training loss must fall clearly below 1.55 and stay there.
+**Harvest:** `kaggle kernels output ougridd/<id> -p <dir>` for the summary and
+checkpoint (only works once a kernel has *finished*).
+
+**S1b — the LR fix is necessary but NOT sufficient. Two further causes, both
+measured.** `scripts/validate_lr_fix_local.py` ran the corrected recipe
+locally (lr 2e-5, effective batch 32, 6,000 rows, 200 steps): loss spiked to
+1.826 at warmup, drifted down, and only crossed below `ln(5)` at step 150
+once the LR had decayed to ~5e-6. So the reader's failure is
+**over-determined**, and the single-cause story above is incomplete:
+
+  1. **We never froze anything.** `reference_reproduction/RESULTS.md` records
+     that `cdeotte/how-to-train-open-book-model-part-2` — the notebook behind
+     the published 0.823761 — froze the **embeddings and the first 18 of 24
+     layers** (77.2M of 435.1M params trainable), lr 2e-5, effective batch
+     16. Every run in this project trained all parameters. On a T4 at batch
+     2, full-unfreeze `deberta-v3-large` completes only ~420 of 1,226 planned
+     steps inside a 75-min budget — a starved regime. Freezing drops the
+     backward pass and AdamW state for three quarters of the network, turning
+     budget into real steps, and is a sample-efficiency win on a small pool.
+     Running as `ougridd/day3-score-push-frozen`.
+  2. **The context budget discards three quarters of the retrieved
+     evidence.** Measured with the real tokenizer on 200 T1 rows: retrieved
+     5-chunk context is a median **1,304 tokens** vs a median 32 for
+     prompt+longest-option, so at `max_length=384` the reader sees a median
+     **26.8%** of it and the full context fits for **1.0%** of rows
+     (512 → 36.6%, 768 → 56.2%, 1024 → 75.7%). **The effective retrieval
+     quality the reader experiences is therefore not recall@5 (0.6207) but
+     something near recall@1 (0.4300)** — chunks at ranks 2–5 are truncated
+     away unread. `deberta-v3`'s relative attention
+     (`position_biased_input: false`, `relative_attention: true`) makes
+     `max_length` > 512 usable with no model surgery, so this is a cheap
+     lever that has never been tested against a reader that could learn.
+
+**S2 — Fix retrieval quality (the other half of the gap).**
+Our answer-support recall@5 is 0.62 on the general corpus. `mbanaei/86-2-with-only-270k-articles`
+reached ~0.862 public **with TF-IDF**, not a neural retriever — so the gap is
+implementation, not model class. Two cheap, high-value moves, in order:
+  1. **Per-option retrieval, RRF-fused** (PLAN.md already calls this the
+     single highest-expected-value trick): five queries, `prompt + option_i`,
+     union and fuse with RRF(k=60) instead of one pooled query. Distractors
+     often live in different articles than the answer, so a pooled query
+     systematically under-retrieves the evidence needed to *reject* options.
+     Reuse `src/llmsci/retrieve/sparse.py`; write the fusion in
+     `src/llmsci/retrieve/fuse.py` per the repo layout.
+  2. **Index more of the corpus.** Current index is 1.6M of 21.56M available
+     chunks (8 of 16 shards) — a RAM-driven cut, not a principled one. On a
+     Kaggle CPU session (12 h, no GPU quota consumed, ~29–32 GB RAM) the full
+     set is indexable. Do this on Kaggle, not locally.
+**Accept rule:** paired bootstrap on recall@5 over the same T1 rows
+(`scripts/compare_corpus_recall_paired.py` is the template); CI must exclude 0.
+
+**S3 — Legitimate reuse of a public fine-tuned checkpoint, correctly measured.**
+This is the only route to a 0.9-class number inside the remaining window, and
+it is **rules-compliant** (the competition explicitly allows public models and
+datasets attached as Kaggle Datasets; ensembling public work was standard
+practice in it). It is also the easiest place to produce a *dishonest* number,
+so the protocol is strict:
+  - `reference_reproduction/RESULTS.md` established that the shipped mgoksu
+    checkpoint scores **0.9170 [0.9056, 0.9282] on T1 but is 100% contaminated
+    against it** — it trained on the public pools T1 was built from (audited
+    at file level). **That number must never be reported as a pipeline
+    result.** Reporting it as ours would be the single fastest way to lose the
+    interview.
+  - The **official 200 (`data/holdout_gold.csv`) is clean** with respect to
+    those public pools: `scripts/build_context_train_pool.py` asserts zero
+    overlap between the cdeotte pool and the gold 200. So the gold set is the
+    correct instrument for a headline number involving any public checkpoint.
+  - **Protocol:** evaluate on the gold 200 with a bootstrap CI, log the eval
+    in `experiments/log.csv` with a date and reason (CLAUDE.md caps the
+    project at ~8 gold evaluations; few have been spent), and report it in a
+    **separate table row explicitly labelled as containing a public
+    checkpoint**, never merged with own-pipeline rows. Cite it in
+    `CREDITS.md` with what was taken and what was ours.
+**Accept rule:** report only if provenance labelling is in place. A 0.9 with
+an unlabelled public checkpoint scores worse than a 0.6 that is ours, because
+it is discoverable in about 90 seconds of questioning.
+
+**S4 — Ensemble the legs (only after ≥2 legs resolve above baseline).**
+Average per-option probabilities across `deberta-v3-base`, `deberta-v3-large`,
+and (if S3 is used) the public checkpoint, following the reader interface
+contract in "## Extended track". Cheap, and typically worth a few points.
+**Accept rule:** paired bootstrap vs. the best single leg; if the CI includes
+0, report it as "not resolved by my eval" — do not round it up.
+
+### Honest expectations, stated before running
+
+Not padding — this is the number to hold the plan to. From a genuine 0.43
+baseline with ~3.5 h left:
+
+| Outcome | Likelihood | Route |
+|---|---|---|
+| 0.55–0.75 on T1, own pipeline | likely | S1 alone, if the LR diagnosis is right |
+| 0.75–0.85 on T1, own pipeline | plausible | S1 + S2 both landing |
+| >0.9 own pipeline, clean, today | unlikely | would need S1 + S2 + S4 all to land near their ceilings |
+| >0.9 with a labelled public checkpoint on the gold 200 | achievable | S3, and it is legitimate *if and only if* labelled |
+
+The gap between the last two rows is the whole ballgame. **Both can be
+reported — as clearly distinct rows.** What cannot happen is presenting the
+S3 number as though it were the S1 number.
 
 ---
 
@@ -473,6 +658,8 @@ Anthropic's contextual retrieval (Sept 2024) cuts top-20 failure rate **5.7% →
 **Throughput:** length-bucket the test set (sort by tokenized length, dynamic batches under a fixed token budget) for a typical 1.5–2× win over fixed padding.
 
 **Fail-safes.** Global `TIME_BUDGET_S` with per-stage wall-clock logging and a hard assert; on exhaustion, fall back to the cheap model's predictions for unprocessed rows — never emit a partial submission. Handle Kaggle's commit/submit asymmetry (200 visible rows at commit, ~4,000 at submit): detect `len(test) == 200` and short-circuit heavy stages so commits stay fast. `tests/test_submission_format.py` asserts exact columns, ≤3 space-delimited labels from {A..E}, no intra-row duplicates, row count matches.
+
+**Background-job monitoring is itself a fail-safe surface, not just a convenience.** A log-tailing watcher only fires on lines matching its grep filter; if the filter doesn't match a script's actual print format, it goes silent forever, indistinguishable from "still waiting" — this produced a real wrong "still running" claim mid-project (see CLAUDE.md, DEVLOG.md). Treat a quiet monitor the same as an untested code path: verify against `ps` / the raw log before reporting status, especially after a gap.
 
 ---
 

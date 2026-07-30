@@ -1,0 +1,20 @@
+{
+  "id": "ougridd/day3-submission",
+  "title": "day3 submission",
+  "code_file": "script.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": false,
+  "dataset_sources": [
+    "ougridd/llmsci-bm25-index-general",
+    "ougridd/llmsci-offline-wheels",
+    "mgoksu/llm-science-run-context-2"
+  ],
+  "competition_sources": [
+    "kaggle-llm-science-exam"
+  ],
+  "kernel_sources": [],
+  "machine_shape": "NvidiaTeslaT4"
+}

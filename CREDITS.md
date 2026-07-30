@@ -43,21 +43,65 @@ liability, cited reuse is a credibility signal.
 
 ## Models and tools
 
-- `microsoft/deberta-v3-base` (MIT) — the reader model for every training
-  run in this project so far.
+- `microsoft/deberta-v3-base` and `microsoft/deberta-v3-large` (MIT) — the
+  reader models for every training run in this project.
 - `bm25s` (MIT) — sparse retrieval, `method="lucene"`.
 - `transformers`, `datasets`, `accelerate`, `torch` (HuggingFace / PyTorch,
   Apache-2.0 / BSD) — training and modeling stack.
 
-## What has NOT happened (stated explicitly, per PLAN.md's own anti-pattern
-warning against silent omission)
+## Public checkpoints used in the final submission — NOT trained by me
 
-No public solution notebook for this competition (1st place, `cdeotte`'s
-open-book notebooks, `mbanaei`'s TF-IDF pipeline, etc.) has been read,
-reimplemented, or reused as code. Their existence and headline scores are
-cited in `PLAN.md` as calibration context, not as a source this project's
-own pipeline derives from. If that changes later (e.g. reproducing one for
-a calibration anchor per `PLAN.md`'s Day-2 plan), it will be logged here
-following `PLAN.md`'s stated process: read end-to-end, close the tab,
-reimplement from a written description, diff the numbers, and only then
-cite it.
+Using public models and datasets was explicitly permitted by this competition
+and was standard practice in it, so these are legitimate submission
+components. They are **not** evidence of models I trained, and every number
+derived from them is reported in its own clearly-labelled table row (see
+`README.md`'s "Not mine" table and `reports/ablation_table.md`'s reference
+table).
+
+- **[`mgoksu/llm-science-run-context-2`](https://www.kaggle.com/datasets/mgoksu/llm-science-run-context-2)**
+  — a `deberta-v3-large` `AutoModelForMultipleChoice` checkpoint fine-tuned by
+  another competitor; one leg of the 50/50 ensemble behind
+  `cdeotte/how-to-train-open-book-model-part-2`'s published 0.823761 public LB.
+  **What I took:** the weights, used verbatim for inference, plus part 2's
+  inference format (`context[:1750] + " #### " + prompt`, then
+  `tokenizer(first, option, truncation=True)`), transcribed so the checkpoint is
+  scored the way it was actually run.
+  **What is mine:** the corpus, chunking, title-prefixing, BM25 index, query
+  construction, the offline inference pipeline, and the evaluation protocol —
+  including the finding that this checkpoint scores **0.9170 on my T1 dev set
+  but is 100% contaminated against it** (audited at file level: its training
+  files cover all 1,500 T1 prompts), which is why it is only ever reported on
+  the clean gold 200 (0.8592 [0.8200, 0.8958]).
+- **[`sandiago21/llm-science-exam-deberta-v3-large-context-3`](https://www.kaggle.com/datasets/sandiago21/llm-science-exam-deberta-v3-large-context-3)**
+  — a second, independently-trained public checkpoint, attached as a candidate
+  ensemble leg. **What I took:** the weights. **What is mine:** the
+  ensembling and the selection protocol — all candidate configs scored on the
+  clean gold 200 with bootstrap CIs, shipping only the config that measurably
+  wins.
+
+## Reproduction of a public solution (`reference_reproduction/`)
+
+`cdeotte/how-to-train-open-book-model-part-1` / `-part-2` were reproduced in a
+separate, clearly-labelled track following `PLAN.md`'s legitimate-reuse process
+(read end-to-end, write down what it does in prose, reimplement from the prose,
+diff the numbers, cite). See `reference_reproduction/NOTES.md` and
+`RESULTS.md`.
+
+**What that track took:** the two-stage retrieval idea, the frozen-layer recipe
+(embeddings + first 18 of 24 layers, 77.2M of 435.1M trainable), and part 2's
+inference tokenization.
+**What it produced independently:** the literal published configuration scores
+0.3770 [0.3577, 0.3960] on my dev set — i.e. it does not clear baseline either,
+and its 0.823761 requires "adjusting the parameters" per its own markdown; the
+null-option data bug; an AdamW `eps=1e-8` NaN failure and its `fused=True`
+workaround; and the contamination audit above.
+
+## What has NOT happened
+
+No public solution's code was copied into `src/llmsci/` or into any submission
+notebook. The 1st-place H2O LLM Studio solution and `mbanaei`'s TF-IDF pipeline
+were **read only** (via their writeups) and are cited in `PLAN.md` as
+calibration context and as the source of specific ideas — layer freezing,
+multiple-corpus blending, per-option retrieval, training on retrieved rather
+than oracle context. Ideas are attributed at the point of use in the code and
+in `DEVLOG.md`.

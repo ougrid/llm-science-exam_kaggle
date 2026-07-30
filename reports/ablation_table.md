@@ -1,5 +1,45 @@
 # Ablation table (Day 1–3, in progress)
 
+> **⚠ READ THIS FIRST — 2026-07-30, late Day 3.** Two corrections, in the
+> order they happened, because the second retracts the first.
+>
+> **What I claimed first (RETRACTED):** that every run's training loss sitting
+> at ~1.61 — with `ln(5) = 1.6094` being the loss of uniform predictions over
+> 5 options — proved the reader never trained, making rows 3 and 5's peaks
+> mere selection noise.
+>
+> **Why that was wrong:** row 3's closed-book run had flat `ln(5)` loss *and*
+> MAP@3 **0.5641**, which at n=1,500 (per-row AP@3 SD ≈ 0.3, SE ≈ 0.008) is
+> ~25 standard errors above the 0.3667 baseline. Both facts hold because
+> **MAP@3 depends only on the rank order of the five logits while
+> cross-entropy depends on their magnitudes** — a model with nearly-equal but
+> consistently-ordered logits has loss ≈ `ln(5)` and still ranks well above
+> chance. `PLAN.md`'s metric section says exactly this ("monotone rescaling of
+> a *single* model's scores is a no-op for MAP@3"). So **`ln(5)` loss means
+> badly calibrated, not unlearned**, and rows 3 and 5's peaks stand as real,
+> as does the "learn fast, forget fast" trajectory.
+>
+> **What actually holds, and it is the project's most useful measurement:**
+> a public 2023 checkpoint (`mgoksu/llm-science-run-context-2`) fed **our own**
+> general-corpus BM25 top-5 context scores **0.8592 [0.8200, 0.8958]** on the
+> clean gold 200 — a lower bound, since it reads context from a retriever it
+> was never trained against. **Our retrieval is not the bottleneck; our reader
+> is.** The same context yielding ~0.43 here yields 0.8592 with a well-trained
+> reader, so corpus scope, BM25 ranking, per-option RRF, and the 26.8%
+> truncation budget are all second-order for us: the remaining score lives
+> almost entirely in reader training (layer freezing, LR schedule, training
+> volume, calibration).
+>
+> **Still genuinely uncertain:** the reader-level verdicts below
+> (phrase-match reranking −0.0490, context length 384→768 −0.0503, the
+> general-corpus swap) were measured against a weak, poorly-calibrated reader.
+> They are not refuted, but they are also not safe to generalize to a
+> well-trained one — read them as "measured on a weak reader", not as
+> properties of the techniques.
+>
+> Nothing below is deleted. The wrong numbers and the wrong conclusions stay
+> visible with corrections attached, which is the point.
+
 All numbers are T1 (1,500-row synthetic dev set) MAP@3 with a 95% bootstrap
 CI unless noted otherwise. Random baseline is the analytic value for 5
 options: **0.3667**. Full per-run detail, including every invalid/superseded
@@ -19,6 +59,24 @@ replacement for that trail.
 | 7 | open-book `deberta-v3-base`, our own BM25 retrieval (**full ~276k-article corpus**), best-checkpoint, *trained + originally scored on Kaggle* | ~~0.3869~~ **0.4297** | ~~[0.3681, 0.4058]~~ **[0.4099, 0.4496]** | Yes (re-scored) | **Corrected 2026-07-30 — see the environment-discrepancy note below.** Kaggle self-reported 0.3869 during training; re-evaluating the identical saved checkpoint locally gives 0.4297, meaningfully higher. The struck-through number is what training logged, kept visible rather than silently edited. |
 | 8 | open-book `deberta-v3-base`, our own BM25 retrieval + **phrase-match rerank** (full corpus), best-checkpoint, *trained on Kaggle, scored locally* | 0.3807 | [0.3618, 0.3997] | Barely | Row 7's reranked counterpart, same correction applied (Kaggle self-reported 0.3947). **Paired bootstrap against row 7, both scored in the same (local) environment: −0.0490 [−0.0750, −0.0229] — reranking measurably HURT the trained reader**, the opposite of what Kaggle's own two separate numbers suggested. See below. |
 | 9 | `reference_reproduction/`: **literal** `cdeotte/how-to-train-open-book-model-part-2` (own reimplementation, `deberta-v3-large`, 1,024-row demo subset, `NUM_TRAIN_SAMPLES` from the published notebook, final checkpoint) | 0.3770 | [0.3577, 0.3960] | No | A separate, clearly-labeled comparison track (see `reference_reproduction/RESULTS.md`), not part of this pipeline. The *published top solution's own literal configuration* doesn't clear baseline either — its 0.823761 requires "adjusting the parameters" per its own markdown. Trained and scored entirely locally, so unaffected by the row 7/8 correction. |
+
+## Reference row — NOT this project's pipeline
+
+Kept in its own table so it can never be misread as an own-pipeline result.
+Using public models/datasets was explicit competition practice, so this is
+legitimate; presenting it as ours would not be.
+
+| # | config | MAP@3 | 95% CI | Tier | Notes |
+|---|---|---|---|---|---|
+| R1 | **PUBLIC CHECKPOINT** `mgoksu/llm-science-run-context-2` (a leg of the notebook behind the published 0.823761), fed **our own** general-corpus BM25 top-5 context, scored in its native part-2 inference format | **0.8592** | [0.8200, 0.8958] | **T2 — clean gold 200** | **The most informative measurement in the project.** Clean: that checkpoint's public training pools have zero prompt overlap with the gold 200 (asserted in `scripts/build_context_train_pool.py`). A *lower* bound: it reads context from a retriever it was never trained against. **Attribution: our retrieval is not the bottleneck — our reader is.** The identical context yields ~0.43 with our reader. Contrast the same weights on **contaminated** T1: 0.9170 [0.9056, 0.9282] — a number that must never be reported as a pipeline result. Cost one of the ~8 budgeted gold-set evaluations, logged with its reason. |
+
+**Why R1 changes what to do next.** Every retrieval-side improvement
+(corpus scope, BM25 ranking, per-option RRF, raising `max_length` past the
+26.8% truncation budget) is second-order while the reader is the binding
+constraint: a well-trained reader already extracts 0.8592 from the context we
+produce today. The remaining score is in reader training — layer freezing
+(the 0.82 notebook froze embeddings + 18/24 layers; we froze nothing), LR
+schedule, training volume, and calibration.
 
 ## Reading the table honestly
 

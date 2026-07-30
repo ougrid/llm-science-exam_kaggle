@@ -1,0 +1,16 @@
+{
+  "id": "ougridd/day3-large-general-corpus-training",
+  "title": "Day 3 large + general corpus training",
+  "code_file": "script.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "ougridd/llmsci-day3-general-corpus-bigpool"
+  ],
+  "competition_sources": [],
+  "kernel_sources": []
+}

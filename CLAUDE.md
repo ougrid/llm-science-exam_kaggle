@@ -27,6 +27,7 @@ These aren't style preferences — they're the difference between a defensible r
 - **Respect existing contracts.** Match `PLAN.md`'s repo layout, config schema, and column names exactly rather than inventing better ones mid-build. If a change to the plan is genuinely warranted, update `PLAN.md` in the same commit and say so in the message.
 - **No AI-slop tells.** No emoji headers, no "comprehensive," no restating the task back at the reader, no tables that carry one fact per row.
 - **We do not reward verbosity.** A concise, well-reasoned notebook cell or report section beats a lengthy generic one — this is doubly true here since the whole point is a 15-minute interview walkthrough, not an exhaustive dump.
+- **A monitor's silence is not evidence a job is still running — check the process directly.** A log-tailing watcher only fires on lines matching its grep filter; if the filter doesn't match the script's actual print format, the watcher goes silent forever and looks identical to "still waiting," even after the job finished or died minutes ago. This has already produced a wrong "still running" claim once (see DEVLOG.md). Before reporting status on a background job, especially after any gap, re-verify with `ps` and/or by reading the log file directly rather than trusting a monitor's absence of notifications. This is the same "coverage — silence is not success" trap that applies to writing the filter in the first place, just as easy to fall into when *reading* one.
 
 ## Git
 

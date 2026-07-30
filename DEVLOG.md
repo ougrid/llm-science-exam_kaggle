@@ -1122,4 +1122,270 @@ GPU use).
 
 ---
 
+## Day 3, late — the reader was never trained: `ln(5)` and the collapse of a day's worth of "findings"
+
+**This is the most important entry in this log, and it invalidates several
+earlier ones.**
+
+The user pushed to prioritize score, which forced a question I had not asked
+directly all project: *why is the reader barely above baseline no matter what
+we feed it?* I had been answering "weak model / weak corpus / distraction",
+and had built an increasingly elaborate story around a
+"learn fast, forget fast" training dynamic — a sharp early MAP@3 spike
+followed by collapse, reproduced in nearly every run (see the Day-1 and
+Day-2 entries above, and `reports/ablation_table.md` rows 3 and 5).
+
+Then I looked at the loss values instead of the MAP@3 values:
+
+```
+epoch 1/3 mean loss: 1.6233
+epoch 2/3 mean loss: 1.6223
+epoch 3/3 mean loss: 1.6138
+ln(5)              = 1.6094
+```
+
+`ln(5)` is exactly the cross-entropy of a uniform distribution over 5
+options. **Every training run in this project sat at random-guess loss from
+start to finish.** The model never learned anything. There was no dynamic to
+explain.
+
+**The decisive test** (`scripts/diagnose_overfit_sanity.py`): can the loop
+overfit 64 rows? A correct training loop must be able to drive loss to ~0 on
+a handful of examples. Swept lr ∈ {5e-6, 2e-5, 5e-5}, 60 steps each:
+
+| lr | first-10-step mean | last-10-step mean | min per-batch |
+|---|---|---|---|
+| 5e-6 | 1.6266 | 1.6562 | 0.6753 |
+| 2e-5 | 2.4061 | 2.2969 | **0.1010** |
+| 5e-5 | 11.2580 | 8.7964 | **0.0018** |
+
+Reaching **0.0018** proves the loop, the label alignment, and
+`truncation="only_first"` are all correct — gradients flow and the
+randomly-initialized MC head can learn. (The high *means* at high lr are
+small-batch instability: this diagnostic used raw batch=2 with no gradient
+accumulation, so effective batch was 2, not the production 32.)
+
+So the cause was optimization scale alone. The arithmetic that should have
+been checked on Day 1:
+
+```
+lr=5e-6, 10% warmup, 465 total optimizer steps
+  -> effective LR at optim_step 15 = 1.63e-6
+```
+
+Optimizer step 15 is the step nearly every run in this project selected as
+its "best checkpoint". At 1.63e-6 the model had barely moved off its random
+initialization. Public 0.82–0.86 solutions used ~60k rows × 2 epochs at
+1e-5–3e-5: **10–20× more total learning.**
+
+**What this costs us, stated plainly rather than buried:**
+
+1. **"Learn fast, forget fast" is not a finding.** It is noise around an
+   untrained model. Every entry above describing it as a real dynamic
+   (including the extended Day-1 investigation into whether the spike was a
+   shortcut) was explaining an artifact. Those entries stay, with this
+   correction pointing at them — deleting them would hide the actual
+   mistake, which was reasoning elaborately about a number instead of
+   sanity-checking that number's floor.
+2. **Row 3's 0.5641 and row 5's 0.6086 are best-of-N selections over
+   noise**, not learned performance. Row 1's options-only probe (0.4780) —
+   a genuine zero-parameter lexical shortcut — is the more parsimonious
+   explanation for anything above baseline.
+3. **Every negative result about the reader is withdrawn, not refuted.**
+   Phrase-match reranking "measurably HURT" (−0.0490), context length
+   384→768 "measurably hurt" (−0.0503), the general-corpus swap "didn't
+   translate" — all three were measured against a reader incapable of
+   learning. They are now **NOT YET TESTED**. Three of the day's
+   cleanest-looking resolved results evaporate at once.
+4. **The retrieval-side results survive**, because they never depended on a
+   trained reader: the corpus swap's +0.1393 [0.1167, 0.1620] recall@5 gain,
+   the recall@k curves, and today's per-option-RRF result (−0.0780
+   [−0.0960, −0.0607]: RRF *hurts* here, at 4× the query cost — PLAN.md
+   called this its highest-expected-value trick, but also correctly
+   predicted muted gains, because our pooled query already contains all five
+   option texts, which is a free HyDE).
+
+**The lesson worth carrying, and the reason this is the entry I would
+actually tell in an interview:** I had a metric floor (0.3667) and a loss
+floor (`ln(5)`) available from Day 1, and I monitored only the first. A model
+pinned at its loss floor cannot have learned, no matter what the task metric
+does — and task metrics on 1,500 rows are noisy enough to manufacture a
+compelling narrative out of nothing. The cheapest guard against a whole day
+of this is the overfit test, which takes about three minutes, and which I ran
+for the first time on the last day.
+
+**Action:** relaunched both legs with corrected optimization —
+`ougridd/day3-score-push-base` (lr 2e-5, 39,249 rows, batch 4 × accum 8,
+2 epochs ≈ 2,452 optimizer steps) and `ougridd/day3-score-push-large`
+(`deberta-v3-large`, lr 1e-5, batch 2 × accum 16). Both now log train loss
+alongside MAP@3 at every eval, specifically so the `ln(5)` floor is visible
+in the output this time; both select checkpoints on a fixed 500-row T1 subset
+and re-score the winner on the full 1,500; and both carry a `TIME_BUDGET_S`
+graceful stop sized so the kernel actually *finishes* — Kaggle only serves
+output files from finished runs, so a kernel still running at the deadline
+would have yielded nothing at all. That last detail was itself a scheduling
+bug I caught only by doing the eval-cost arithmetic (24 full-T1 evals on
+`deberta-v3-large` ≈ 2 h of pure evaluation, which would have consumed the
+entire remaining window).
+
+---
+
+## Day 3, later — correcting the correction: what the overfit test did and did not prove
+
+Within the same hour of writing the `ln(5)` entry above, two things came back
+that force amendments to it. Recording them here rather than editing that
+entry silently, because the sequence of being wrong is the useful part.
+
+**Amendment 1 — the overfit test does not prove the labels are meaningful.**
+I wrote that reaching a per-batch loss of 0.0018 on 64 rows "proves the loop,
+the label alignment, and `truncation='only_first'` are all correct". The loop
+and the gradient path, yes. **Label alignment, no** — a model can memorize 64
+rows perfectly even if their labels are randomly scrambled, because
+memorization does not require the labels to mean anything. That inference was
+simply invalid, and `ln(5)`-pinned loss is *exactly* what scrambled labels
+would also produce, so the two hypotheses were still live and I had claimed
+one was closed.
+
+What actually validates the labels is a separate check: does the known
+length shortcut show up in the training pool? Correct answers in this
+GPT-3.5-generated benchmark run longer than distractors (row 1's options-only
+probe measured 0.4780 vs a 0.3667 baseline). Measured on the pools directly:
+
+| pool | longest option == answer | chance |
+|---|---|---|
+| `train_pool_own_context_general_big` (39,249 rows) | **32.7%** | 20% |
+| `t1_dev_own_context_general_big` (1,500 rows) | **33.3%** | 20% |
+
+Well above chance in both, so options and `answer` are correctly aligned and
+the label hypothesis is genuinely closed now — by evidence that actually
+bears on it. (Incidental finding from the same check, worth its own note:
+**8.8% of training-pool rows contain duplicate option text**, which makes
+those rows partly ill-posed. T1 has none. Not the main problem, but it is
+free label noise in training.)
+
+**Amendment 2 — "just raise the LR" is not sufficient, and I over-claimed it.**
+`scripts/validate_lr_fix_local.py` ran the corrected recipe locally at
+production-equivalent effective batch 32, lr=2e-5, 6,000 rows, 200 optimizer
+steps. Loss went 1.618 → 1.826 (warmup spike) → drifting down → and only
+crossed below `ln(5)` at step 150, at 1.6016, once the LR had decayed to
+~5e-6. Two hundred steps of the corrected recipe produced almost no learning.
+
+The honest reading is **not** that the LR diagnosis was wrong — the
+1.63e-6-at-the-selected-step arithmetic still stands, and the effect is real.
+It is that LR was necessary but nowhere near sufficient, and I presented a
+partial cause as the whole cause. The probe is also not a faithful test of
+the Kaggle runs: its LR schedule compresses into 200 steps whereas theirs
+span 2,452 and 1,226, so its late-decay learning is a schedule artifact.
+
+**What the probe did usefully surface: we never froze anything.**
+`reference_reproduction/RESULTS.md` records that
+`cdeotte/how-to-train-open-book-model-part-2` — the notebook behind the
+published 0.823761 — froze **the embeddings and the first 18 of 24 layers**,
+leaving 77.2M of 435.1M params trainable, at lr 2e-5 and effective batch 16.
+Every run in this project trained all parameters. On a T4 at batch 2, a
+full-unfreeze `deberta-v3-large` gets through only ~420 of its 1,226 planned
+steps inside a 75-minute budget — the same starved regime the local probe sat
+in. Freezing removes the backward pass and the AdamW state for three quarters
+of the network, converting budget into real optimizer steps, and it is a
+sample-efficiency win on a small pool. Swapped the full-unfreeze large leg for
+`ougridd/day3-score-push-frozen` on that basis.
+
+**Third finding, independent of training: we were only ever showing the reader
+a quarter of its context.** Measured with the real tokenizer on 200 T1 rows:
+retrieved 5-chunk context is a median **1,304 tokens**, prompt+longest-option
+is a median 32, so at `max_length=384` the reader sees a median **26.8%** of
+the retrieved context and the full context fits for **1.0%** of rows
+(512 → 36.6%; 768 → 56.2%; 1024 → 75.7%). So the effective retrieval quality
+the reader experiences is not recall@5 (0.6207) but something near recall@1
+(0.4300) — answer-supporting chunks at ranks 2–5 are usually truncated away
+before the model can read them. This makes the withdrawn
+"context length 384→768 measurably hurt" result doubly suspect: it was
+measured against an untrained reader *and* it is the change that should
+mechanically have helped most.
+
+**Net position going into the last two hours:** the reader's failure is
+over-determined — starved optimization, no layer freezing, and a context
+budget that discards three quarters of the retrieved evidence. Each is
+independently supported and each is a live lever. What I no longer believe is
+the tidy single-cause story I wrote an hour ago.
+
+---
+
+## Day 3, latest — I was wrong about `ln(5)`: loss at the uniform floor means UNCALIBRATED, not UNLEARNED
+
+Third revision in one evening, and this one retracts the central claim of the
+two entries above. Recording it in full because the error is instructive and
+because leaving the wrong version standing would poison the artifact.
+
+**The contradiction that exposed it.** The Day-1 closed-book run's per-epoch
+mean loss was flat at `ln(5)` (1.6169 → 1.6151 → 1.6108) — which I had just
+declared proof that "the reader never learned anything". But that same run
+scored **MAP@3 0.5641 [0.5439, 0.5840]** at optimizer step 30. With n=1,500
+and a per-row AP@3 SD of ~0.3, the standard error is ~0.008, so 0.5641 sits
+roughly **25 standard errors above the 0.3667 baseline**. That is not noise,
+and no amount of best-of-N selection over 1,500 rows manufactures a 25-SE
+excursion.
+
+**Why both facts are true at once.** MAP@3 depends only on the *rank order* of
+the five logits; cross-entropy depends on their *magnitudes*. A model whose
+logits are nearly equal — but consistently ordered so the correct option edges
+ahead — has a loss arbitrarily close to `ln(5)` while ranking far better than
+chance. `PLAN.md` states this exact property in its metric section
+("monotone rescaling of a *single* model's scores is a no-op for MAP@3") and I
+did not connect it to the loss curve I was interpreting.
+
+So `loss ≈ ln(5)` means the reader is **badly calibrated / low-confidence**,
+NOT that it failed to learn. My inference "loss at the floor ⟹ no learning"
+was simply invalid.
+
+**What this retracts (from my own entries earlier tonight):**
+
+- **"The reader was never trained" — retracted.** It trains, weakly and
+  without confidence. `ln(5)` was never evidence of the contrary.
+- **"'Learn fast, forget fast' is not a finding" — retracted; the finding is
+  restored.** A 25-SE peak at step 30 followed by a genuine fall to 0.3830 at
+  end-of-training is a real trajectory, not selection noise. I over-corrected,
+  and the struck-through text in `reports/limitations.md` and the banner in
+  `reports/ablation_table.md` need reinstating with their original meaning.
+- **My local probe was mis-designed.** `scripts/validate_lr_fix_local.py`
+  deliberately measured only loss ("the loss floor is the thing being
+  tested") and printed `VERDICT: STILL STUCK near ln(5)`. Given the above,
+  that verdict is uninformative about learning: I needed MAP@3, the metric
+  that is actually rank-based, and I explicitly chose not to compute it to
+  save time. Its conclusion should be disregarded.
+
+**What survives, and it is the most valuable measurement of the project.**
+While the above was unravelling, the gold-200 reference eval finished:
+
+> `mgoksu/llm-science-run-context-2`, a public 2023 checkpoint, fed **our own**
+> general-corpus BM25 top-5 context, scores **MAP@3 0.8592 [0.8200, 0.8958]**
+> on the clean gold 200 (n=200, baseline 0.3667).
+
+This is a clean number (that checkpoint's training pools have zero prompt
+overlap with the gold 200, asserted in `scripts/build_context_train_pool.py`),
+and it is a *lower* bound, since the checkpoint reads context from a retriever
+it was never trained against. It settles the attribution question this whole
+project exists to answer:
+
+**Our retrieval is not the bottleneck. Our reader is.** The same context that
+yields 0.43 with our reader yields 0.8592 with a well-trained one. Corpus
+scope, BM25 ranking, per-option RRF, and the 26.8% truncation budget are all
+therefore second-order for us right now — a strong reader extracts 0.86 from
+exactly the context we already produce. Every remaining point of score is in
+reader training: layer freezing, LR schedule, training volume, and
+calibration.
+
+**The meta-lesson, which is the honest headline of this project.** In one
+evening I asserted three incompatible root causes — undertrained reader,
+over-determined failure, and now miscalibrated-but-learning — each with
+confident supporting arithmetic. The failure mode was not lack of rigor in any
+single step; it was reaching for a single-cause explanation and then
+marshalling evidence for it, rather than looking for the measurement that
+would discriminate between hypotheses. The measurement that finally did
+(a known-good reader on our own context) was cheap, available all along, and
+is exactly the "calibration anchor" `PLAN.md` specified on Day 0 and that I
+deferred repeatedly.
+
+---
+
 <!-- Append new entries above this line as work continues. -->

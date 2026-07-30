@@ -32,3 +32,11 @@ kaggle.json
 
 # Claude Code agent worktrees (isolated checkouts, not project content)
 .claude/
+
+# Kaggle dataset upload staging areas: the payloads are uploaded to Kaggle
+# Datasets and must not enter git. dataset-metadata.json is kept, since it
+# documents exactly what was uploaded and under which slug.
+notebooks/kaggle/*-data/*
+!notebooks/kaggle/*-data/dataset-metadata.json
+*.npy
+*.whl

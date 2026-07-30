@@ -58,6 +58,16 @@ def main() -> None:
     parser.add_argument("--index-dir", default="bm25_index_full", help="index dir name under data/")
     parser.add_argument("--suffix", default="full", help="output filename suffix, e.g. train_pool_own_context_<suffix>.parquet")
     parser.add_argument("--rerank", action="store_true", help="rerank top-50 BM25 candidates by phrase-match count before taking top-5")
+    parser.add_argument(
+        "--train-pool",
+        default="train_pool.csv",
+        help=(
+            "filename under data/ to use as the training pool (prompt/A-E/answer columns; any "
+            "pre-existing 'context' column is dropped since we retrieve our own). Supports .csv "
+            "or .parquet. E.g. train_pool_context.parquet for the larger, already T1-filtered "
+            "52,923-row cdeotte pool instead of the default 4,978-row pool."
+        ),
+    )
     args = parser.parse_args()
     index_dir = DATA / args.index_dir
 
@@ -65,7 +75,10 @@ def main() -> None:
     chunk_texts = chunk_texts_series["text"].tolist()
     index = BM25Index.load(index_dir, chunk_texts)
 
-    train_pool = pd.read_csv(DATA / "train_pool.csv")
+    train_pool_path = DATA / args.train_pool
+    train_pool = pd.read_parquet(train_pool_path) if train_pool_path.suffix == ".parquet" else pd.read_csv(train_pool_path)
+    if "context" in train_pool.columns:
+        train_pool = train_pool.drop(columns=["context"])
     t1 = pd.read_csv(DATA / "t1_dev.csv")
 
     # A handful of train_pool rows have a null option (same class of bug found
