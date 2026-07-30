@@ -143,6 +143,62 @@ reordering protects.
 
 Cut in this order: Day 4's submission engineering (keep the README) → the context-length sweep → the reranker → the dense leg. **Never cut the Day-3 eval harness or the Day-1 metrics module.** A 0.84 with the oracle ceiling, recall@k curves, and honest CIs is a substantially better interview artifact than a 0.90 with none of it.
 
+### Last-day pivot (2026-07-30): what the top-2 writeups actually say
+
+Read both writeups directly (`team-h2o-llm-studio-1st-place-solution`,
+`lytic-2nd-place-solution` — JS-rendered pages, fetched via the
+`agent-browser` skill since plain HTTP only returns the SPA shell) rather
+than continuing on secondhand citations, after being asked directly
+whether model capacity was the actual bottleneck. Full narrative in
+`DEVLOG.md`; this section is the resulting action items.
+
+**The bottleneck is not model capacity.** 2nd place's *primary* reader is
+the exact same `DebertaV2ForMultipleChoice` this project uses. Their
+retrieval + learned-reranker system alone reaches **0.916 Private**
+(their own ablation table) before any LLM is added — a Mistral leg on top
+adds only ~0.015. This matches what this project's own findings today
+already pointed to independently (recall vs. ranking vs. corpus coverage,
+not architecture).
+
+**Four concrete, evidenced gaps, in priority order:**
+
+1. **Corpus scope (highest priority — explains a failure already found by
+   hand).** 2nd place indexed *general* Wikipedia (`graelo/wikipedia`, all
+   topics). This project's corpus (`mbanaei`'s STEM-filtered set) cannot
+   structurally contain non-STEM entities — which is almost certainly why
+   BM25 failed to find "Big Mama Thornton" and "Didymogenes" even at full
+   ~276k-article coverage (see `DEVLOG.md`'s hand-comparison entries). The
+   general-Wikipedia alternative this document already names
+   (`jjinho/wikipedia-20230701`, in "Assets to build on" below) was never
+   actually used until today's swap — see the `## Assets to build on`
+   entry for its promoted status.
+2. **A trained reranker, not a heuristic.** 2nd place's reranker is a
+   `DebertaV2ForMultipleChoice`-shaped model trained to predict *which
+   retrieved chunk is best*, using pseudo-labels from a teacher model
+   (their own early `deberta-v3-large` checkpoint). This project's cheap
+   phrase-match rerank (recall@5 0.510→0.585, but an unresolved/negative
+   downstream MAP@3 effect once properly checked — see `DEVLOG.md`'s
+   Kaggle-vs-local entry) was a fast first test of the same idea; the
+   trained version is the natural next step once the corpus swap is
+   measured.
+3. **Train on retrieved context, not the true source context.** 1st place
+   explicitly measured this and found training on ground-truth context
+   scored *worse*. Independent, external validation of `CLAUDE.md`'s
+   train/eval-retriever-consistency rule, arrived at by a top team for the
+   same underlying reason this project adopted it.
+4. **Unused public datasets** that 2nd place's data list includes:
+   `openbookqa`, `ai2_arc`, `qasc`, `sciq`, `eduqg_llm_formatted`. Lower
+   priority than the corpus swap — more rows without more corpus coverage
+   wouldn't have fixed the Big Mama Thornton class of failure.
+
+**GPU quota, corrected again**: `get_accelerator_quota_statistics`'s
+`totalTimeAllowed: 21600s` is a **per-session** cap, not the weekly total —
+confirmed against the Kaggle UI (25h7m available of 30h at time of
+writing). Day 1's "correction" over-corrected; **30h/week was right all
+along**, and every "one third of the weekly quota" style estimate
+elsewhere in this document (e.g. under "Local 8 GB vs Kaggle") still holds
+using the original 30h figure.
+
 ---
 
 ## Extended track — independent workstreams if more time or resources appear
@@ -284,8 +340,8 @@ Scatter **recall@5 (x) vs MAP@3 (y)** across all pipeline configs, annotate Spea
 ## Assets to build on (do not rebuild these)
 
 **Corpora** — attach on Kaggle, never download locally. Parsing a Wikipedia dump would burn the entire budget and add nothing to the story.
-- `mbanaei/all-paraphs-parsed-expanded` — 270K STEM Wikipedia articles, paragraph-parsed. **Primary.**
-- `jjinho/wikipedia-20230701` — 270k plaintext parse, sharded by first letter. Second corpus for diversity.
+- `mbanaei/all-paraphs-parsed-expanded` — 270K STEM Wikipedia articles, paragraph-parsed. Used through Day 3; found to structurally miss non-STEM entities (the Didymogenes/Big Mama Thornton failures) since it's STEM-filtered — 2nd place's writeup uses general Wikipedia instead, which is why this project is downloading and switching to the entry below on 2026-07-30.
+- **`jjinho/wikipedia-20230701`** — 270k plaintext parse, sharded by first letter, general (not STEM-filtered) Wikipedia. **Promoted to primary corpus 2026-07-30** — see "Last-day pivot" under "If a day evaporates" above.
 - `mbanaei/stem-wiki-cohere-no-emb` — Cohere-embedding-selected STEM subset.
 
 **Pre-retrieved training data — the biggest time-saver in the plan.** Lets you train a reader *before* your retriever exists.
