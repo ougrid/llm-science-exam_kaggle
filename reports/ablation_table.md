@@ -17,6 +17,7 @@ replacement for that trail.
 | 5 | open-book `deberta-v3-base`, cdeotte context, best-checkpoint, **train/eval source-matched** | **0.6086** | [0.5880, 0.6291] | Yes | 4,586 rows, one of cdeotte's 12 constituent sources, matched to T1's own dominant source. Same spike-then-collapse shape as row 3 (peak at step 15 of ~429). Best result in the project so far — but transient, and on a small single-source slice. |
 | 6 | open-book `deberta-v3-base`, our own BM25 retrieval (20k-article slice), best-checkpoint, **fully self-consistent by construction** | 0.3866 | [0.3673, 0.4057] | Barely (CI lower bound clears baseline by 0.0006) | Same retriever for train and eval by construction — no source-mismatch possible — yet barely above baseline. Index covers only ~7% of the corpus. |
 | 7 | open-book `deberta-v3-base`, our own BM25 retrieval (**full ~276k-article corpus**), best-checkpoint | 0.3869 | [0.3681, 0.4058] | Barely | Same recipe as row 6, 14x the corpus coverage, **statistically indistinguishable result**. This corpus's retrieval eval harness (`reports/retrieval_eval.md`) measures real recall@5=0.481 — so recall existing in aggregate did not translate into training gains. See below: hand-inspection found why. |
+| 8 | `reference_reproduction/`: **literal** `cdeotte/how-to-train-open-book-model-part-2` (own reimplementation, `deberta-v3-large`, 1,024-row demo subset, `NUM_TRAIN_SAMPLES` from the published notebook, final checkpoint) | 0.3770 | [0.3577, 0.3960] | No | A separate, clearly-labeled comparison track (see `reference_reproduction/RESULTS.md`), not part of this pipeline. The *published top solution's own literal configuration* doesn't clear baseline either — its 0.823761 requires "adjusting the parameters" per its own markdown. Statistically indistinguishable from row 7's final-checkpoint result on different context. Corroborates that the 0.37→0.61 gap (rows 7 vs 5) is checkpoint-selection, not architecture or model scale. |
 
 ## Reading the table honestly
 
@@ -58,9 +59,26 @@ replacement for that trail.
   T3-OOD recall@100=0.588, a real measured distribution shift). The
   oracle-context ceiling and 2×2 failure decomposition still need design
   work given the lack of source-article ground truth (see that report).
-- Rows not yet run: dense retrieval, hybrid RRF, reranking — explicitly
-  deferred per `PLAN.md`'s time-budget decision, not attempted and found
-  wanting.
+- **A cheap phrase-match rerank (no new model) improved recall@5 from
+  0.510 to 0.585** on a 200-row T1 sample (`src/llmsci/retrieve/rerank.py`)
+  — confirming the ranking diagnosis above. A retrain against this
+  reranked context is in flight; result pending in `experiments/log.csv`.
+- **A separate comparison track reproduced a top public solution
+  faithfully** (`reference_reproduction/`, row 8) rather than forking it
+  — the legitimate-reuse process `PLAN.md` calls for, elevated to a full
+  parallel track given time pressure. Its most valuable output wasn't the
+  score: it found that **PLAN.md's "reproduce a notebook for a calibration
+  anchor" strategy doesn't work for this competition** (the shipped
+  checkpoint scores 0.9170 on T1 but is 100% contaminated — trained on
+  the same public pools T1 was built from), which is now struck from
+  `PLAN.md`. Its reranker experiment also independently found the same
+  small-but-real improvement pattern this pipeline found (+0.0153
+  [+0.0007, +0.0293] in-window recall on their pipeline), and reported
+  that it declined to run the expensive reader-level MAP@3 delta because
+  their eval couldn't resolve it — a good model for when *not* to spend a
+  training run.
+- Not yet run: dense retrieval, hybrid RRF fusion — explicitly deferred
+  per `PLAN.md`'s time-budget decision, not attempted and found wanting.
 
-Last updated from `experiments/log.csv` through the 2026-07-30 full-corpus
-Kaggle run and the cdeotte-vs-own-retrieval context hand-comparison.
+Last updated from `experiments/log.csv` through the 2026-07-30 phrase-match
+rerank test and the `reference_reproduction/` comparison track.

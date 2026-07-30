@@ -49,9 +49,9 @@ Assume ~7 hours per day. Every day ends with a committed artifact and a row in `
 2. **Sparse retrieval (1.5 h).** `bm25s` with `method="lucene"`, hierarchical article → chunk. Query = `prompt + all five options`.
 3. **The mismatch row (0.5 h).** Paste top-5 chunks into the Day-1 closed-book reader at inference. **It will go flat or down.** That is train/inference input mismatch, and discovering it firsthand is worth more than reading about it. Table it as row 5.
 4. **The jump (3 h).** Retrain the reader with retrieved context — using `cdeotte/60k-data-with-context-v2` to skip the expensive retrieval-over-training-data step. Expect **~0.82–0.86**. This is the emotional center of the demo.
-5. **Reproduce one known-good pipeline (0.5 h setup, runs unattended).** `cdeotte/how-to-train-open-book-model-part-2` scored **0.823761** public; `mbanaei/86-2-with-only-270k-articles` scored ~**0.862**. Measuring one of these on *your* holdout gives you a **(holdout, LB) calibration anchor** that ties your scale to the real leaderboard — and it is your insurance policy if late submission is dead.
+5. ~~**Reproduce one known-good pipeline for a calibration anchor.**~~ **Tried, and struck from the plan on 2026-07-30 — see `reference_reproduction/RESULTS.md`.** Reproduced `cdeotte/how-to-train-open-book-model-part-2` faithfully (own reimplementation, not a fork) and found the strategy doesn't work for this competition: its shipped checkpoint scores 0.9170 on our T1, but 100% of T1's 1,500 prompts are inside that checkpoint's own training data (it trains on the same public radek1 files T1 was built from). Any strong 2023 public checkpoint was trained on the union of the public synthetic pools, so any synthetic dev set built from those pools — which is exactly what T1 is — is contaminated as an eval target for it. The only uncontaminated tiers for a public-checkpoint anchor are the gold 200 (sacred, capped) and T3. Since late submission was already verified to score normally, nothing is lost by dropping this — but say so explicitly rather than leaving it as a live fallback.
 
-**Day 2 deliverable:** the 0.70 → 0.85 jump, plus a calibration anchor.
+**Day 2 deliverable:** the 0.70 → 0.85 jump. (No calibration anchor — see above.)
 
 **Actual Day 2 outcome (updated after execution — kept the original estimate
 above for comparison, since the gap is itself part of the story):**
@@ -299,7 +299,7 @@ Scatter **recall@5 (x) vs MAP@3 (y)** across all pipeline configs, annotate Spea
 - `jjinho/open-book-llm-science-exam` — the original FAISS open-book notebook.
 - `ybabakhin/1st-place-team-h2o-llm-studio` — 1st place code.
 
-Those published LB scores are **calibration anchors**: reproduce one, measure it on your own holdout, and you have a (holdout, LB) pair that anchors your scale to the real leaderboard. If late submission turns out to be disabled, this is your only bridge to it — and it costs nothing extra.
+~~Those published LB scores are **calibration anchors**~~ — struck 2026-07-30: reproducing `cdeotte/how-to-train-open-book-model-part-2`'s shipped checkpoint and measuring it on our own T1 found it scores 0.9170 there, but 100% of T1 is inside its training data (see `reference_reproduction/RESULTS.md`). A public checkpoint trained on the union of the public synthetic pools cannot be used to calibrate against a dev set built from those same pools. Late submission already verified to score normally, so this isn't needed as a fallback anyway.
 
 ---
 

@@ -900,6 +900,88 @@ the full-corpus retrain, and this diagnostic. `reports/ablation_table.md`
 and `reports/retrieval_eval.md` still need a pass to fold this row in —
 next up.
 
+## Day 3 — the reranker fix, and a parallel reference reproduction
+
+User returned, granted full continued autonomy, and asked two things
+directly: whether the plan ever called for following a top Kaggle
+solution's path, and whether the modest scores so far meant it was time to
+pivot toward one. Answered honestly rather than either dismissing the
+concern or abandoning the project's own thesis: `PLAN.md` did plan for
+reproducing one public solution, but narrowly, as a calibration anchor,
+with its own anti-patterns section calling blind-forking "the one thing
+that sinks the project." Agreed on two parallel tracks: fix the actual
+diagnosed problem (BM25's lack of phrase/entity awareness) in the main
+pipeline, and spawn an isolated agent to faithfully reproduce a top
+solution as an explicitly separate, clearly-labeled comparison track.
+
+**The cheap fix worked.** Before committing to a cross-encoder reranker,
+tested the cheapest possible version: reorder BM25's top-50 candidates by
+counting exact multi-word phrase overlaps with the query
+(`src/llmsci/retrieve/rerank.py`), no new model. On a 200-row T1 sample:
+recall@5 improved **0.510 → 0.585**. Before trusting that, tested and
+ruled out a competing hypothesis first — that the *Didymogenes*/Big Mama
+Thornton failures found earlier meant a genuine corpus-domain gap (a
+STEM-only corpus can't contain a blues singer). Checked at scale: 0/100
+random T1 rows had their answer keywords entirely absent from the corpus.
+Those two examples were rare edge cases, not representative — the ranking
+diagnosis holds. Rebuilt the training/eval context with reranking applied
+and kicked off a retrain on Kaggle; result pending.
+
+**The parallel reproduction agent found something more valuable than a
+score.** Working in an isolated git worktree (`isolation: "worktree"`,
+kept fully segregated from `src/llmsci/`, `experiments/log.csv`, and this
+file per its own instructions), it faithfully reproduced
+`cdeotte/how-to-train-open-book-model-part-2` — read the actual pulled
+notebook, wrote up its architecture in prose first, then reimplemented
+from that prose, never copy-pasting. Three findings now integrated (full
+detail in `reference_reproduction/RESULTS.md`, committed as its own
+labeled comparison track, not blended into this pipeline's numbers):
+
+1. **The published notebook's literal configuration doesn't clear
+   baseline either**: 0.3770 [0.3577, 0.3960] on our T1, CI containing
+   0.3667. Its `NUM_TRAIN_SAMPLES=1_024` is explicitly a demo subset
+   (1.7% of available data), and the notebook's own markdown conditions
+   the quoted 0.915 CV claim on "adjusting the parameters." A top
+   solution's *literal, as-published* artifact is not the same thing as
+   its *tuned, leaderboard-scoring* configuration — worth remembering
+   before assuming any public score transfers to a faithful rerun.
+2. **PLAN.md's calibration-anchor idea is unsound for this competition,
+   and is now struck.** The shipped `mgoksu` checkpoint scores 0.9170 on
+   T1 — but 100% of T1's 1,500 prompts are inside its own training data
+   (it trains on the same public radek1 files T1 was built from). Any
+   strong 2023 public checkpoint was trained on the union of the public
+   synthetic pools; any synthetic dev set built from those pools is
+   contaminated as an eval target for it, by construction. This is a
+   real methodology correction to the plan, not a footnote.
+3. **The 0.37-vs-0.61 gap this project has been chasing all day is
+   checkpoint selection, not architecture.** The reproduction's
+   final-checkpoint 0.3770 is statistically indistinguishable from this
+   pipeline's own final-checkpoint result on identical cdeotte context
+   (0.3721 [0.3534, 0.3913]) — different model size, learning rate, and
+   context budget, same collapsed outcome. `deberta-v3-large` at 2e-5
+   with `load_best_model_at_end=False` lands exactly where
+   `deberta-v3-base` at 5e-6 does. This reframes 0.6086 honestly: it is a
+   real number, reached through a legitimate and standard technique
+   (best-checkpoint selection), but it is not evidence this pipeline's
+   architecture or recipe is doing something the published solution
+   isn't — both hit the same transient-spike-then-collapse wall.
+
+The agent also independently reproduced this project's own null-option
+finding (22.7% in cdeotte's data by its count, vs. this project's 25.8% —
+close enough to be the same phenomenon, counted independently) and the
+`AdamW eps=1e-8` NaN-on-sm_120 finding, adding `fused=True` as a second
+working fix alongside this project's own `eps=1e-6`. It also ran the same
+reranker idea on its own pipeline and found the same small-but-real
+pattern (+0.0153 [+0.0007, +0.0293] in-window recall) — then explicitly
+declined to spend two ~33-minute training runs measuring a reader-level
+delta its own eval couldn't resolve. That's a good model of judgment to
+carry forward: report the measurement that answers the question, and
+don't spend compute on a number you already know will be noise.
+
+Both `PLAN.md` and `reports/ablation_table.md` updated to reflect all of
+this. `reference_reproduction/` is explicitly not part of this pipeline's
+own headline numbers — cited here for the findings, not the score.
+
 ---
 
 <!-- Append new entries above this line as work continues. -->
