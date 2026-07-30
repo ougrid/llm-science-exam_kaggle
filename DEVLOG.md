@@ -982,6 +982,80 @@ Both `PLAN.md` and `reports/ablation_table.md` updated to reflect all of
 this. `reference_reproduction/` is explicitly not part of this pipeline's
 own headline numbers — cited here for the findings, not the score.
 
+### The reranked retrain landed — and revealed a bigger problem than reranking
+
+Kaggle's reranked-context run finished: best checkpoint (optim_step 105 of
+~465) **0.3947 [0.3756, 0.4139]**, and — encouragingly at first glance —
+the collapse was much gentler than every other run today (final 0.3858
+stayed close to best, instead of crashing back to baseline). Compared
+against the prior full-corpus run's self-reported 0.3869, this read as
+confirmation that the phrase-match rerank fix worked.
+
+**It didn't survive a proper check.** Before trusting two separately-eyeballed
+Kaggle CIs (exactly the mistake CLAUDE.md's paired-bootstrap rule exists to
+prevent), downloaded both best checkpoints and ran a real paired comparison
+locally. The two numbers didn't just fail to match Kaggle's — they
+contradicted them outright:
+
+```
+                    Kaggle self-reported      Local re-evaluation (same checkpoint, same data)
+no-rerank (row 7)   0.3869 [0.3681,0.4058]    0.4297 [0.4099,0.4496]
+reranked  (row 8)   0.3947 [0.3756,0.4139]    0.3807 [0.3618,0.3997]
+```
+
+Locally, the paired bootstrap (reranked − no-rerank) is **−0.0490
+[−0.0750, −0.0229], resolved** — reranking *hurt*, the opposite of what
+Kaggle's own numbers suggested. Ruled out a bug in the comparison script
+first: re-ran each checkpoint in total isolation (separate processes, no
+possibility of cross-contamination between loading two models
+back-to-back) and got identical numbers to the paired run. This is a real
+environment effect, not a script error.
+
+**Most likely cause, not fully confirmed given the time budget**: Kaggle's
+docker image almost certainly ships a different `transformers` version
+than this project's local venv (`5.14.1`) — script.py never printed the
+installed version, so this isn't nailed down precisely, only inferred from
+elimination. `DebertaV2ForMultipleChoice`'s disentangled-attention
+implementation is exactly the kind of code that can behave differently
+across library versions without erroring.
+
+**What this actually costs the project, stated plainly**: every number in
+`experiments/log.csv` and `reports/ablation_table.md` that was *trained on
+Kaggle and self-scored there* (both full-corpus own-retrieval runs) is now
+suspect for comparison against anything trained and scored locally — which
+is everything else in this project. Worse, each Kaggle run's own
+best-checkpoint *selection* happened using Kaggle's environment during
+training, so the checkpoint saved as "best" may not be the checkpoint that
+scores best locally — and there is no way to recover that retroactively
+without re-running training with local-environment scoring at every eval
+step, which the time budget doesn't allow today.
+
+**What still stands, and why**: the retrieval-level finding that motivated
+building the reranker in the first place — recall@5 rising from 0.510 to
+0.585 on a 200-row sample — was measured with no trained model involved at
+all, purely a property of the retriever and the eval harness's own code,
+run once, locally. It's untouched by any of this. What's now honestly
+unresolved is the *next* link in the chain: whether better retrieval
+ranking actually improves what the reader learns. Today's evidence says no,
+but that evidence is itself compromised by the environment issue, so the
+correct label is "not demonstrated," not "disproven."
+
+`reports/ablation_table.md` rows 7-8 corrected with the local numbers,
+struck-through Kaggle originals kept visible rather than edited away, and
+a prominent methodological note added rather than a quiet fix. Logged as
+its own diagnostic row in `experiments/log.csv`
+(`CRITICAL_diagnostic_kaggle_vs_local_eval_environment_discrepancy`) given
+how much of today's Kaggle-trained work it touches.
+
+**The lesson, again, in a new place**: this is the same instinct as Day
+1's eps/best-checkpoint debugging and today's earlier corpus-ceiling
+correction — a result that "looks right" on first read (two CIs each
+individually clearing baseline, in the expected direction) still needs the
+actual paired, same-environment check before it gets to be a claim. Two
+separate Kaggle runs agreeing with each other's *own* self-scoring is not
+independent confirmation of anything if both share the same measurement
+bias.
+
 ---
 
 <!-- Append new entries above this line as work continues. -->
