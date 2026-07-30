@@ -90,6 +90,45 @@ a **lower bound**, since it reads context from a retriever it was never trained
 against. The same weights score 0.9170 on my T1 dev set — a number that is
 **100% contaminated** and appears here only as a warning, never as a result.
 
+## The attribution table
+
+`PLAN.md` asked for an oracle-context ceiling to split reader loss from
+retrieval loss. There was no oracle available — until it became clear that the
+known-good public reader *is* one. Hold retrieval fixed, vary only the reader:
+
+| Reader, on T1 with **my** retrieved context | MAP@3 | 95% CI |
+|---|---|---|
+| known-good public checkpoint | **0.7970** | [0.7687, 0.8247] |
+| my trained reader | **0.3840** | [0.3649, 0.4036] |
+| **reader-attributable loss** | **0.4130** | — |
+
+So ~41 MAP@3 points sit in reader training alone, and everything above 0.7970 is
+what better retrieval could add. That is an exact split, not an impression, and
+it is the number that should have driven every decision from day 2 onward.
+
+The same reader scores 0.8600 on the official 200 with the same retrieval, so
+T1 is *modestly* harder than the gold set — not a broken eval. I had floated
+"maybe T1 is just a harder yardstick" as an explanation for the gap an hour
+before measuring it; it was a comfortable story and it was mostly wrong.
+
+### The pre-flight gate (`scripts/hypothesis_gate.py`)
+
+The generalizable lesson from three wrong hypotheses. The move is an inversion:
+**use a known-good model as an instrument to test your data, not as a score to
+chase.** Scores well → the data is learnable, the failure is yours to fix by
+training. Scores badly → the data is the problem and no training run can help.
+
+| Check | Cost | Result |
+|---|---|---|
+| Row/context alignment | seconds | 25/25 exact — no silent row shift |
+| Train vs eval context quality | seconds | 0.6433 vs 0.6133, CIs overlap — comparable |
+| Known-good reader on target eval | ~5 min | 0.7970 — data is learnable |
+
+Standing rule now: **no GPU run without the gate passing first.** Below 0.5 on
+the third check, the quota isn't spent at all. Each of my three wrong
+hypotheses — "never trained", "over-determined", "starved of steps" — would have
+died in minutes against it.
+
 ## Retrieval, measured independently of the reader
 
 No source-article ground truth exists in any tier (checked directly), so

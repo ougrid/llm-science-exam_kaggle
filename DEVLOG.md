@@ -1478,4 +1478,63 @@ baseline) and row 5's 0.6086 on cdeotte's context.
 
 ---
 
+## Day 4 — the attribution table, and a pre-flight gate so the next hypothesis is cheap
+
+Asked directly: what can be run locally so I stop burning GPU hours on wrong
+hypotheses? The answer was an inversion I had available all project and never
+made.
+
+**We own a known-good reader.** `mgoksu/llm-science-run-context-2` scores 0.8600
+on the clean gold 200 with our context. That makes it an **instrument for
+testing our data**, not merely a score to envy: run it on a dataset and if it
+scores well, the data is learnable and any failure is ours to fix by training;
+if it scores badly, the data is the problem and no amount of reader training can
+help. Every one of the three wrong hypotheses would have died in minutes against
+that test.
+
+`scripts/hypothesis_gate.py`, three checks cheapest-first:
+
+| Check | Result | What it eliminates |
+|---|---|---|
+| 1. Row/context alignment (CPU, seconds) | **25/25 exact**, both the src2 training file and the T1 file | A silent row shift, which would wreck training while leaving inference-time retrieval correct -- indistinguishable from "the reader cannot learn" |
+| 2. Train vs eval context quality (CPU, seconds) | train 0.6433 [0.5867,0.6967] vs eval 0.6133 [0.5567,0.6667], CIs overlap | "Our retrieval is worse on training data than eval data" |
+| 3. Known-good reader on our eval + our context (GPU, ~5 min) | **0.7970 [0.7687,0.8247]** (n=500) | "Our context or eval set is inadequate" -- it is not |
+
+### This is PLAN.md's attribution table, finally instantiated
+
+The plan asked for an oracle-context ceiling on day 3 and it kept slipping
+because there was no oracle. The known-good reader **is** the oracle:
+
+```
+known-good reader, T1 + our context      0.7970  [0.7687, 0.8247]
+our trained reader, same data            0.3840  [0.3649, 0.4036]
+-------------------------------------------------------------------
+reader-attributable loss                 0.4130 MAP@3
+```
+
+With retrieval held fixed, ~41 points sit in reader training alone. That is an
+exact figure rather than an impression, and it is the number that should have
+driven every decision from day 2 onward.
+
+It also retires a reframe I had floated an hour earlier -- "maybe T1 is simply a
+harder yardstick than the official 200". Measured: 0.7970 on T1 vs 0.8600 on the
+gold 200 with the same reader and the same retrieval. Modestly harder, not
+broken. I am glad I checked rather than adopting it, because it was a
+comfortable explanation that would have excused the gap.
+
+### Decision recorded
+
+The running source-matched job (`ougridd/day4-src2-train`) is **justified**: the
+data supports ~0.80, so a properly-trained reader has real room. Explicitly not
+a prediction that it reaches 0.80 -- the ceiling being there is not the same as
+our recipe attaining it. Best own-model result to date is row 6's 0.6086
+(source-matched, cdeotte's context); this run tests the same source matching
+with our context.
+
+And the standing rule, which is the actual deliverable of this entry: **no
+further GPU run without the gate passing first.** Below 0.5 on check 3, the
+quota does not get spent at all.
+
+---
+
 <!-- Append new entries above this line as work continues. -->
