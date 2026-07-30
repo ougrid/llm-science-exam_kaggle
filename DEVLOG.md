@@ -1056,6 +1056,70 @@ separate Kaggle runs agreeing with each other's *own* self-scoring is not
 independent confirmation of anything if both share the same measurement
 bias.
 
+## Last day — reading the top-2 writeups, and a quota correction
+
+User pushed on three things at once, all fair given this is the last day:
+whether model capacity was the actual bottleneck, whether more capable
+models were available and unused, and a GPU quota figure that didn't match
+what they saw in the Kaggle UI (25h7m available of 30h, not the 6h/week
+this project had "corrected" itself to on Day 1).
+
+**Quota, corrected again.** The `get_accelerator_quota_statistics` API's
+`totalTimeAllowed: 21600s` field is the **per-session** cap (6h), not the
+weekly total — confirmed against the UI directly, which shows 30h/week.
+Day 1's "correction" over-corrected: the original 30h/week figure was
+right all along, the API field was just misread. `PLAN.md` fixed again.
+Lesson under the lesson: a number coming from an API call is not
+automatically more trustworthy than a widely-cited figure just because
+it's programmatic — this field's own name (`totalTimeAllowed`) doesn't
+disambiguate per-session from per-week, and verifying "does this match
+what I can independently observe" (the UI) is still worth doing even for
+API-sourced numbers.
+
+**Read both top-2 writeups directly** (JS-rendered pages, not fetchable by
+plain HTTP -- used the `agent-browser` skill to actually load and read
+them) rather than continuing to reason from `PLAN.md`'s older secondhand
+citations. Directly answers "is the model bad": no. 2nd place
+(`lytic`/`ivan sorokin`)'s *primary* reader is the exact same
+`DebertaV2ForMultipleChoice` this project uses, and their retrieval +
+learned-reranker system alone reaches **0.916 Private** before any LLM is
+added — their own ablation table shows the DeBERTa-only system does
+almost all the work; a Mistral leg adds ~0.015 on top of an already-strong
+base. Model capacity was never the bottleneck; retrieval infrastructure
+is, exactly as this project's own findings today (recall vs. ranking vs.
+corpus coverage) already pointed to independently.
+
+**Concrete, actionable gaps identified against our own pipeline:**
+1. **Corpus**: 2nd place indexed *general* Wikipedia (`graelo/wikipedia`,
+   all topics), not a STEM-filtered set. This is almost certainly the
+   real explanation for the Didymogenes/Big Mama Thornton failures found
+   earlier — `mbanaei`'s corpus structurally cannot contain non-STEM
+   entities, and no amount of BM25/reranking tuning fixes an article
+   that was never indexed. `PLAN.md` already names a general-Wikipedia
+   alternative (`jjinho/wikipedia-20230701`) that was never used until now.
+2. **A trained reranker, not a heuristic.** 2nd place's reranker is a
+   `DebertaV2ForMultipleChoice`-shaped model trained to predict *which
+   retrieved chunk is best*, using pseudo-labels from a teacher model
+   (their own early `deberta-v3-large` checkpoint). This project's
+   phrase-match rerank was a cheap first test of the same idea (recall@5
+   0.510→0.585) — the real version of it is training a small model to do
+   this, which is very achievable with what's already built.
+3. **Train on retrieved context, not the true source context** — 1st
+   place explicitly measured this and found training on ground-truth
+   context scored *worse* than training on retrieved context. Direct,
+   independent validation of `CLAUDE.md`'s train/eval-retriever-consistency
+   rule, arrived at by a top team for the same reason this project adopted
+   it.
+4. Additional public datasets used by 2nd place that this project hasn't
+   touched: `openbookqa`, `ai2_arc`, `qasc`, `sciq`, `eduqg_llm_formatted`.
+
+**Decision**: with quota corrected (real headroom: ~25h this week) and the
+corpus gap being the most concretely evidenced fix (it explains a failure
+already found by hand, not just theorized), swap to the general-Wikipedia
+corpus next, in parallel with the still-running local context-length
+sweep (CPU-bound download/chunk/index work doesn't compete with that job's
+GPU use).
+
 ---
 
 <!-- Append new entries above this line as work continues. -->
