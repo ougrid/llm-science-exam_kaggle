@@ -849,6 +849,57 @@ Full-corpus retraining kicked off on Kaggle (same kernel, new dataset
 version with the full-corpus context replacing the 20k-slice pilot data,
 same filenames so `script.py` needed no changes). Result pending.
 
+### The full-corpus result — and the finding that actually explains the gap
+
+Full-corpus retraining finished (5801.5s, ~97 min): best checkpoint
+(optim_step 15) **0.3869 [0.3681, 0.4058]** — essentially identical to the
+20k-slice pilot's 0.3866. Scaling retrieval coverage 14x (20k → 276k
+articles) moved the training result by 0.0003. Not the outcome expected
+after the eval harness measured real recall (0.481 @5, 0.711 @100) on this
+same index.
+
+Rather than accept "recall isn't the answer" as the final word, spent five
+minutes hand-comparing cdeotte's context against our own full-corpus
+retrieval for the same T1 rows (merged on prompt) — and the answer was
+immediate, not statistical. Row 0 (a question about the genus
+*Didymogenes*): cdeotte's context opens with **"Didymogenes is a genus of
+green algae in the class Trebouxiophyceae"** — nearly verbatim the correct
+answer text. Our own retrieval, even over the full corpus, returned
+*Ochromonas* — a different genus entirely (the same failure already
+flagged back in the Day-2 mismatch-row work, now confirmed to persist at
+14x the corpus coverage). Row 2 (Big Mama Thornton): cdeotte's context
+names her explicitly; ours retrieved a Chinese internet-censorship
+neologism and an unrelated athlete also surnamed Thornton — fooled by
+matching "Big" + "mama" + "Thornton" as three independent tokens rather
+than one named entity.
+
+**This reframes the whole day's investigation.** It isn't that our
+retriever finds fewer relevant passages in aggregate (recall@5=0.48 says
+otherwise) — it's that BM25's bag-of-words scoring has no phrase- or
+entity-level understanding, and gets outranked by lexically-similar but
+topically-wrong chunks on exactly the multi-word named entities this
+benchmark is full of. That failure mode doesn't improve with more corpus
+coverage, because the problem is *ranking* what's already there, not
+*whether* the right article exists in the index. cdeotte's context being
+this precise is itself informative: it's either derived closer to the
+true generating article than any retrieval this project has built, or
+comes from a genuinely stronger retrieval pipeline — this sample doesn't
+distinguish which, and that's an honest open question, not a gap papered
+over.
+
+**The actionable takeaway for a next session**: the next lever isn't more
+corpus coverage, it's phrase-aware or entity-aware retrieval — requiring
+multi-word phrase matches to score highly, or adding a reranker that can
+tell "Big Mama Thornton" from three unrelated tokens. Logged as a proper
+diagnostic row in `experiments/log.csv`, not folded silently into the
+training result's notes.
+
+All results from today are now logged: the corpus/index build, the
+retrieval eval harness (both proxies... rather, both tiers of Proxy B),
+the full-corpus retrain, and this diagnostic. `reports/ablation_table.md`
+and `reports/retrieval_eval.md` still need a pass to fold this row in —
+next up.
+
 ---
 
 <!-- Append new entries above this line as work continues. -->

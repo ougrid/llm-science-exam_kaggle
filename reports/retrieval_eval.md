@@ -53,13 +53,25 @@ computable with the data this project has.
   generated from than human-written ARC/MMLU questions (T3) are — exactly
   the kind of shift `PLAN.md` built T3 to catch, now demonstrated rather
   than assumed.
-- **This connects directly to the open-book training results.** The
-  20k-article pilot slice (covering ~7% of the corpus) produced a reader
-  that barely cleared baseline (0.3866 MAP@3). This full-corpus index's
-  recall@5 of 0.48 is real signal, not nothing — a training run against
-  this index (in progress, see `experiments/log.csv` for the result once
-  logged) is the direct test of whether that recall improvement upgrades
-  reader performance the way the retrieval-recall thesis predicts.
+- **This connects directly to the open-book training results — but not
+  the way expected.** Training against this full-corpus index landed at
+  0.3869 MAP@3, statistically indistinguishable from the 20k-article
+  pilot slice's 0.3866, despite this index's measured recall@5=0.481
+  being real, substantial signal. Hand-inspecting the actual retrieved
+  text (not another aggregate metric) found why: for a *Didymogenes*
+  classification question, cdeotte's context (used in the 0.6086
+  source-matched run) opens with "Didymogenes is a genus of green algae
+  in the class Trebouxiophyceae" — nearly verbatim the answer — while our
+  own retrieval, even over the full corpus, returned a different genus
+  (*Ochromonas*) entirely. For a "Big Mama Thornton" question, ours
+  retrieved a Chinese internet-censorship neologism and an unrelated
+  athlete, fooled by matching "Big" + "mama" + "Thornton" as three
+  independent tokens rather than one named entity. **BM25's bag-of-words
+  scoring has no phrase- or entity-level understanding, and that failure
+  mode doesn't improve with more corpus coverage** — recall@k answers "is
+  a supporting chunk retrievable at all," not "does it outrank
+  lexically-similar-but-wrong chunks," which is the thing that actually
+  determined training performance here. Full writeup in `DEVLOG.md`.
 
 ## Not yet done
 
@@ -69,8 +81,14 @@ computable with the data this project has.
   needs its own design (e.g., use a high-confidence answer-support hit as
   a stand-in oracle passage) rather than PLAN.md's original recipe.
 - **2×2 failure decomposition** (reader-correct × gold-passage-retrieved)
-  needs the trained reader's predictions, pending the full-corpus
-  retraining run.
+  needs the trained reader's predictions. The full-corpus retraining run
+  has now completed (0.3869 MAP@3) — this is unblocked but not yet built.
+- **Phrase-aware or entity-aware retrieval (e.g. a reranker), identified
+  above as the actual next lever** — not corpus coverage, which is now
+  ruled out by the 20k-vs-276k comparison. Requiring multi-word phrase
+  matches to score highly, or reranking top-k with a cross-encoder that
+  can recognize "Big Mama Thornton" as one entity, is the natural next
+  experiment.
 - **Hand-inspecting 30 misses** to estimate the redundancy correction
   factor PLAN.md calls for (a "miss" by this proxy may still be a
   perfectly good supporting passage phrased differently) — not done given
