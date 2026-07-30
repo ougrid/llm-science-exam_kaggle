@@ -53,6 +53,43 @@ Assume ~7 hours per day. Every day ends with a committed artifact and a row in `
 
 **Day 2 deliverable:** the 0.70 → 0.85 jump, plus a calibration anchor.
 
+**Actual Day 2 outcome (updated after execution — kept the original estimate
+above for comparison, since the gap is itself part of the story):**
+
+The predicted ~0.82–0.86 jump did not materialize at pilot scale, and the
+reason is more interesting than the number. In order:
+- `cdeotte/60k-data-with-context-v2` has a real data-quality bug (25.8% of
+  rows have a null option, stringified to the literal text `"nan"`) and a
+  real train/eval confound (T1's exact-matched context is 93% one of its
+  12 constituent sources; a naive training subset drew mostly from the
+  others). Both cost significant debugging time and are logged in full in
+  `DEVLOG.md` and `experiments/log.csv`.
+- Once train/eval context source was matched exactly, the closed-book-style
+  "sharp early spike, then collapse" pattern reappeared, peaking at **0.6086
+  MAP@3** (best-checkpoint-selected, resolved vs. baseline) — a real signal,
+  clearly above the 0.5641 closed-book ceiling, but transient and far below
+  0.82–0.86.
+- A fully self-consistent alternative — our own BM25 retrieval, same
+  retriever for train and eval by construction — landed at **0.3866**,
+  essentially unresolved, because the index only covers a 20k-article slice
+  (~7% of the corpus) and can't find the right source article for most
+  questions.
+- **Conclusion, and the actual headline finding of Day 2**: train/eval
+  retriever consistency is necessary but not sufficient — retrieval
+  *recall* is the dominant lever, exactly this project's central thesis,
+  now demonstrated with a controlled negative result rather than only a
+  positive one. The 0.82–0.86 number is very plausibly reachable with the
+  full corpus + more training data + more epochs (none of which were fully
+  exhausted at pilot scale under the time budget), but that remains
+  unverified — reported honestly as open, not assumed.
+- Kaggle infra note: the `enable_gpu`/`enable_internet` training-kernel
+  pattern works, but budget for a mount-path glob fallback (same class of
+  issue as Day 1's `test.csv` path), possible P100 assignment despite a
+  `machine_shape` request, and DeBERTa's disentangled attention being more
+  memory-hungry on T4 at longer sequences than the raw token count
+  suggests — reuse whatever batch size is already validated locally rather
+  than re-tuning on Kaggle.
+
 ### Day 3 — the differentiator (~7 h) — **protect this day**
 
 This is the highest-value block in the plan. If the schedule slips, cut Day 4 polish before you cut any of this.
@@ -62,6 +99,39 @@ This is the highest-value block in the plan. If the schedule slips, cut Day 4 po
 3. **Rerank + context length (1.5 h).** `gte-reranker-modernbert-base` top-50 → top-5; report recall@5 before vs after (the point of a reranker is that it raises precision@5 without changing recall@50). Then the context sweep 512 → 1280, deliberately reproducing 4th place's monotone finding on your own pipeline.
 
 **Day 3 deliverable:** ~0.88–0.90, the attribution table, the recall@k curves, and the recall-vs-MAP scatter. *"I replicated a published result"* is a much stronger claim than *"I got 0.89."*
+
+**Today's compressed execution plan (decided 2026-07-30, afternoon session,
+after Day 2 ran long).** Grounded in actually-observed pace today, not the
+optimistic per-day estimates above: full-corpus retrieval build (chunk +
+index + attach context) realistically costs ~45–90 min untested at this
+scale, and a retraining run costs ~90 min based on both of today's actual
+runs (local source-matched: 3581s; Kaggle own-retrieval: 5384s) — call it
+3–4 hours before Day 3 even starts. Doing Day 3's full 7-hour scope on top
+of that in one afternoon is not realistic. Decided instead to run Day 3
+item 1 (the eval harness) **in parallel with the retraining run**, since
+`retrieve/eval.py` needs only the retriever, the corpus, and T1/T3's known
+source labels — not a trained reader — so the two don't actually compete
+for the same critical path. Concretely, today's order is:
+
+1. Commit the Day 2 state.
+2. Scale the corpus/BM25 index from the 20k-article pilot slice to the full
+   ~276k articles (`scripts/build_corpus_slice.py`'s `N_ARTICLES`, and
+   re-run `build_bm25_index.py` / `build_own_retrieval_context.py`).
+3. Kick off retraining on the full-corpus own-retrieval context (same
+   recipe as the 20k-slice run: `deberta-v3-base`, best-checkpoint
+   selection, `lr=5e-6, eps=1e-6`).
+4. **While that trains**, build `src/llmsci/retrieve/eval.py` (recall@k on
+   both proxies, oracle-context ceiling, the 2×2 failure decomposition) —
+   this is Day 3 item 1, pulled forward to run concurrently rather than
+   sequentially.
+5. Interpret both results together once training finishes; this is where
+   the attribution table and the recall-vs-MAP scatter actually come from.
+
+**Explicitly deferred, not cut**: dense retrieval + hybrid RRF (item 2) and
+reranking + the context-length sweep (item 3) slip to a later session. This
+matches `PLAN.md`'s own stated cut order below almost exactly — the eval
+harness was always the one thing not to cut, and it's the one thing this
+reordering protects.
 
 ### Day 4 — submission and the artifact (~7 h)
 

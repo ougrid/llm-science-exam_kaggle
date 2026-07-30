@@ -109,3 +109,57 @@ def test_gold_has_no_internal_exact_duplicates():
 def test_t3_has_no_internal_exact_duplicate_questions():
     t3 = pd.read_parquet(_t3_path)
     assert t3["question"].duplicated().sum() == 0
+
+
+# --- Day-2 open-book context data (scripts/build_context_train_pool.py) ---
+
+_train_pool_context_path = DATA / "train_pool_context.parquet"
+_t1_dev_context_path = DATA / "t1_dev_context.parquet"
+_context_built = _train_pool_context_path.exists() and _t1_dev_context_path.exists()
+
+pytestmark_context = pytest.mark.skipif(
+    not _context_built, reason="context train pool not built yet — run scripts/build_context_train_pool.py"
+)
+
+_JOIN_COLS = ["prompt", "A", "B", "C", "D", "E", "answer"]
+
+
+@pytestmark_context
+def test_train_pool_context_has_no_null_options():
+    # 25.8% of the raw cdeotte context file has a null option, which
+    # stringifies to the literal text "nan" as a fake answer choice --
+    # silently trained an open-book run to a flat loss for a full epoch
+    # before this was caught. See DEVLOG.md's "the vanishing option" entry.
+    train_pool_context = pd.read_parquet(_train_pool_context_path)
+    null_option_rows = train_pool_context[["A", "B", "C", "D", "E"]].isna().any(axis=1).sum()
+    assert null_option_rows == 0, f"{null_option_rows} rows have a null option"
+
+
+@pytestmark_context
+def test_train_pool_context_has_no_gold_overlap():
+    gold = pd.read_csv(_gold_path)
+    train_pool_context = pd.read_parquet(_train_pool_context_path)
+    overlap = train_pool_context["prompt"].isin(gold["prompt"]).sum()
+    assert overlap == 0, f"{overlap} open-book training rows overlap the gold 200"
+
+
+@pytestmark_context
+def test_train_pool_context_has_no_t1_exact_row_overlap():
+    t1 = pd.read_csv(_t1_path)
+    train_pool_context = pd.read_parquet(_train_pool_context_path)
+    t1_keys = set(map(tuple, t1[_JOIN_COLS].values.tolist()))
+    pool_keys = set(map(tuple, train_pool_context[_JOIN_COLS].values.tolist()))
+    overlap = t1_keys & pool_keys
+    assert not overlap, f"{len(overlap)} T1 rows leaked into open-book training data"
+
+
+@pytestmark_context
+def test_t1_dev_context_is_exactly_t1_with_context_attached():
+    t1 = pd.read_csv(_t1_path)
+    t1_context = pd.read_parquet(_t1_dev_context_path)
+    assert len(t1_context) == len(t1)
+    assert t1_context["prompt"].duplicated().sum() == 0
+    assert t1_context["context"].isna().sum() == 0
+    t1_keys = set(map(tuple, t1[_JOIN_COLS].values.tolist()))
+    context_keys = set(map(tuple, t1_context[_JOIN_COLS].values.tolist()))
+    assert t1_keys == context_keys

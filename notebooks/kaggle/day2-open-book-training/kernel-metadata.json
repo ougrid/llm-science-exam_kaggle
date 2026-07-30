@@ -1,0 +1,14 @@
+{
+  "id": "ougridd/day-2-open-book-training-own-retrieval",
+  "title": "Day 2 open book training - own retrieval",
+  "code_file": "script.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": ["ougridd/llmsci-day2-own-retrieval-context"],
+  "competition_sources": [],
+  "kernel_sources": []
+}
