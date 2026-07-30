@@ -1,0 +1,18 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+T1 rows: 1500, budget 256 tokens
+
+rows with no distinctive keyword (metric undefined, counted as miss): 346
+context tokens surviving truncation: mean 218 of a median 1067-token context
+
+answer-support hit rate INSIDE the 256-token window (n=1500):
+  MiniLM order (as shipped) : 0.5613  95% CI [0.5360, 0.5867]
+  gte-reranker-modernbert   : 0.5767  95% CI [0.5513, 0.6020]
+
+  paired delta: +0.0153  95% CI [+0.0007, +0.0293]
+  rows that changed: 8.1%   MDE at this n: +/-0.0144
+  verdict: RESOLVED
+
+  full untruncated context : 0.6527  95% CI [0.6287, 0.6773]  <- ceiling for any reordering
+  headroom truncation costs: 0.0913 (MiniLM) / 0.0760 (reranked)
+
+wrote /home/ougrid/claude-projects_ougridd/llm-science-exam_kaggle/.claude/worktrees/agent-ac4ad47f865adc409/reference_reproduction/results/window_recall.json

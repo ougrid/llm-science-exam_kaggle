@@ -1,0 +1,71 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+device: cuda  tag: faithful  context column: context
+train 1024 | monitor 500 | T1 1500
+Loading weights:   0%|          | 0/390 [00:00<?, ?it/s]Loading weights: 100%|██████████| 390/390 [00:00<00:00, 26621.40it/s]
+[transformers] [1mDebertaV2ForMultipleChoice LOAD REPORT[0m from: microsoft/deberta-v3-large
+Key                                     | Status     | 
+----------------------------------------+------------+-
+mask_predictions.LayerNorm.bias         | UNEXPECTED | 
+mask_predictions.classifier.bias        | UNEXPECTED | 
+lm_predictions.lm_head.LayerNorm.weight | UNEXPECTED | 
+mask_predictions.LayerNorm.weight       | UNEXPECTED | 
+lm_predictions.lm_head.LayerNorm.bias   | UNEXPECTED | 
+mask_predictions.dense.bias             | UNEXPECTED | 
+mask_predictions.classifier.weight      | UNEXPECTED | 
+mask_predictions.dense.weight           | UNEXPECTED | 
+lm_predictions.lm_head.bias             | UNEXPECTED | 
+lm_predictions.lm_head.dense.weight     | UNEXPECTED | 
+lm_predictions.lm_head.dense.bias       | UNEXPECTED | 
+classifier.weight                       | MISSING    | 
+classifier.bias                         | MISSING    | 
+pooler.dense.bias                       | MISSING    | 
+pooler.dense.weight                     | MISSING    | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.
+[model] trainable 77.2M / 435.1M params (froze embeddings=True, first 18 layers)
+[gpu_guard] micro-step (bs=1 x5 x256): 199 ms/step (limit 475) -- OK
+optimizer steps: 64/epoch, 128 total (effective batch 16)
+  [monitor] batch 100/125 elapsed 32s rate 3.1 b/s eta 8s
+  [monitor] batch 125/125 elapsed 40s rate 3.1 b/s eta 0s
+[step 16/128] loss 1.6809 monitor MAP@3 0.4287 [0.3947,0.4633] elapsed 1.6m eta 11.0m
+  [monitor] batch 100/125 elapsed 32s rate 3.2 b/s eta 8s
+  [monitor] batch 125/125 elapsed 40s rate 3.2 b/s eta 0s
+[step 32/128] loss 1.7849 monitor MAP@3 0.4170 [0.3830,0.4527] elapsed 3.1m eta 9.4m
+  [monitor] batch 100/125 elapsed 32s rate 3.2 b/s eta 8s
+  [monitor] batch 125/125 elapsed 39s rate 3.2 b/s eta 0s
+[step 48/128] loss 1.7802 monitor MAP@3 0.4290 [0.3950,0.4637] elapsed 4.7m eta 7.8m
+  [monitor] batch 100/125 elapsed 32s rate 3.2 b/s eta 8s
+  [monitor] batch 125/125 elapsed 39s rate 3.2 b/s eta 0s
+[step 64/128] loss 1.7155 monitor MAP@3 0.4307 [0.3950,0.4660] elapsed 6.2m eta 6.2m
+epoch 1/2 done (6.2m)
+  [monitor] batch 100/125 elapsed 32s rate 3.2 b/s eta 8s
+  [monitor] batch 125/125 elapsed 39s rate 3.2 b/s eta 0s
+[step 80/128] loss 1.6869 monitor MAP@3 0.3980 [0.3647,0.4327] elapsed 7.8m eta 4.7m
+  [monitor] batch 100/125 elapsed 32s rate 3.2 b/s eta 8s
+  [monitor] batch 125/125 elapsed 39s rate 3.2 b/s eta 0s
+[step 96/128] loss 1.6434 monitor MAP@3 0.3980 [0.3650,0.4317] elapsed 9.3m eta 3.1m
+  [monitor] batch 100/125 elapsed 32s rate 3.2 b/s eta 8s
+  [monitor] batch 125/125 elapsed 40s rate 3.2 b/s eta 0s
+[step 112/128] loss 1.6431 monitor MAP@3 0.4223 [0.3890,0.4557] elapsed 10.9m eta 1.6m
+  [monitor] batch 100/125 elapsed 32s rate 3.2 b/s eta 8s
+  [monitor] batch 125/125 elapsed 40s rate 3.2 b/s eta 0s
+[step 128/128] loss 1.6313 monitor MAP@3 0.4013 [0.3680,0.4353] elapsed 12.4m eta 0.0m
+epoch 2/2 done (12.4m)
+
+scoring final model on T1 dev (1500 rows)...
+  [T1] batch 100/375 elapsed 32s rate 3.1 b/s eta 88s
+  [T1] batch 200/375 elapsed 64s rate 3.1 b/s eta 56s
+  [T1] batch 300/375 elapsed 95s rate 3.1 b/s eta 24s
+  [T1] batch 375/375 elapsed 119s rate 3.1 b/s eta 0s
+  [monitor-final] batch 100/125 elapsed 32s rate 3.2 b/s eta 8s
+  [monitor-final] batch 125/125 elapsed 40s rate 3.2 b/s eta 0s
+
+=== faithful ===
+T1 dev MAP@3 (n=1500): 0.3770  95% CI [0.3577, 0.3960]
+monitor MAP@3 (n=500): 0.4013  95% CI [0.3680, 0.4353]
+random baseline: 0.3667
+train 12.4 min, T1 inference 2.0 min
+peak GPU 5.40 GB
+wrote results to /home/ougrid/claude-projects_ougridd/llm-science-exam_kaggle/.claude/worktrees/agent-ac4ad47f865adc409/reference_reproduction/results

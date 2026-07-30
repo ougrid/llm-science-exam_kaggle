@@ -1,0 +1,29 @@
+{
+  "n": 1500,
+  "budget_tokens": 256,
+  "minilm_hit_rate": 0.5613333333333334,
+  "minilm_ci": [
+    0.536,
+    0.5866666666666667
+  ],
+  "reranked_hit_rate": 0.5766666666666667,
+  "reranked_ci": [
+    0.5513333333333333,
+    0.602
+  ],
+  "paired_delta": 0.015333333333333332,
+  "paired_delta_ci": [
+    0.0006666666666666666,
+    0.029333333333333333
+  ],
+  "rows_changed": 0.08066666666666666,
+  "mde": 0.014357158303247589,
+  "resolved": true,
+  "full_context_hit_rate": 0.6526666666666666,
+  "full_context_ci": [
+    0.6286666666666667,
+    0.6773333333333333
+  ],
+  "mean_context_tokens_kept": 218.128,
+  "rows_without_keywords": 346
+}

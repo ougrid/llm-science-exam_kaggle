@@ -1,0 +1,58 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/138 [00:00<?, ?it/s]Loading weights: 100%|██████████| 138/138 [00:00<00:00, 3409.66it/s]
+[rerank] Alibaba-NLP/gte-reranker-modernbert-base on cuda, 150M params
+[rerank] 142 ms per 64-pair batch (limit 420)
+
+reranking T1: 1500 rows
+  [T1] 256/1500 rows  elapsed 1.1m rate 4.0 rows/s eta 5.2m
+  [T1] 512/1500 rows  elapsed 2.1m rate 4.0 rows/s eta 4.1m
+  [T1] 768/1500 rows  elapsed 3.2m rate 4.0 rows/s eta 3.0m
+  [T1] 1024/1500 rows  elapsed 4.2m rate 4.0 rows/s eta 2.0m
+  [T1] 1280/1500 rows  elapsed 5.3m rate 4.0 rows/s eta 0.9m
+  [T1] 1500/1500 rows  elapsed 6.2m rate 4.0 rows/s eta 0.0m
+  [T1] sentences per row: mean 27.4 median 26 p10 21 p90 35
+  wrote /home/ougrid/claude-projects_ougridd/llm-science-exam_kaggle/.claude/worktrees/agent-ac4ad47f865adc409/reference_reproduction/data/t1_eval_cdeotte_ctx.parquet
+
+reranking train: 8192 rows
+  [train] 256/8192 rows  elapsed 0.8m rate 5.0 rows/s eta 26.3m
+  [train] 512/8192 rows  elapsed 1.7m rate 4.9 rows/s eta 26.1m
+  [train] 768/8192 rows  elapsed 2.6m rate 4.9 rows/s eta 25.2m
+  [train] 1024/8192 rows  elapsed 3.5m rate 4.9 rows/s eta 24.4m
+  [train] 1280/8192 rows  elapsed 4.3m rate 4.9 rows/s eta 23.3m
+  [train] 1536/8192 rows  elapsed 5.3m rate 4.8 rows/s eta 23.0m
+  [train] 1792/8192 rows  elapsed 6.1m rate 4.9 rows/s eta 21.8m
+  [train] 2048/8192 rows  elapsed 6.9m rate 4.9 rows/s eta 20.8m
+  [train] 2304/8192 rows  elapsed 7.8m rate 4.9 rows/s eta 19.9m
+  [train] 2560/8192 rows  elapsed 8.6m rate 5.0 rows/s eta 18.8m
+  [train] 2816/8192 rows  elapsed 9.4m rate 5.0 rows/s eta 18.0m
+  [train] 3072/8192 rows  elapsed 10.3m rate 5.0 rows/s eta 17.1m
+  [train] 3328/8192 rows  elapsed 11.1m rate 5.0 rows/s eta 16.2m
+  [train] 3584/8192 rows  elapsed 11.9m rate 5.0 rows/s eta 15.3m
+  [train] 3840/8192 rows  elapsed 12.7m rate 5.0 rows/s eta 14.4m
+  [train] 4096/8192 rows  elapsed 13.5m rate 5.0 rows/s eta 13.5m
+  [train] 4352/8192 rows  elapsed 14.3m rate 5.1 rows/s eta 12.6m
+  [train] 4608/8192 rows  elapsed 15.2m rate 5.1 rows/s eta 11.8m
+  [train] 4864/8192 rows  elapsed 16.0m rate 5.1 rows/s eta 11.0m
+  [train] 5120/8192 rows  elapsed 16.9m rate 5.1 rows/s eta 10.1m
+  [train] 5376/8192 rows  elapsed 18.0m rate 5.0 rows/s eta 9.4m
+  [train] 5632/8192 rows  elapsed 18.9m rate 5.0 rows/s eta 8.6m
+  [train] 5888/8192 rows  elapsed 19.7m rate 5.0 rows/s eta 7.7m
+  [train] 6144/8192 rows  elapsed 20.5m rate 5.0 rows/s eta 6.8m
+  [train] 6400/8192 rows  elapsed 21.4m rate 5.0 rows/s eta 6.0m
+  [train] 6656/8192 rows  elapsed 22.2m rate 5.0 rows/s eta 5.1m
+  [train] 6912/8192 rows  elapsed 23.0m rate 5.0 rows/s eta 4.3m
+  [train] 7168/8192 rows  elapsed 23.9m rate 5.0 rows/s eta 3.4m
+  [train] 7424/8192 rows  elapsed 24.8m rate 5.0 rows/s eta 2.6m
+  [train] 7680/8192 rows  elapsed 25.7m rate 5.0 rows/s eta 1.7m
+  [train] 7936/8192 rows  elapsed 26.5m rate 5.0 rows/s eta 0.9m
+  [train] 8192/8192 rows  elapsed 27.4m rate 5.0 rows/s eta 0.0m
+  [train] sentences per row: mean 26.5 median 24 p10 21 p90 32
+  wrote /home/ougrid/claude-projects_ougridd/llm-science-exam_kaggle/.claude/worktrees/agent-ac4ad47f865adc409/reference_reproduction/data/train_8192.parquet
+
+reranking monitor: 500 rows
+  [monitor] 256/500 rows  elapsed 0.9m rate 4.9 rows/s eta 0.8m
+  [monitor] 500/500 rows  elapsed 1.7m rate 4.9 rows/s eta 0.0m
+  [monitor] sentences per row: mean 27.1 median 25 p10 21 p90 32
+  wrote /home/ougrid/claude-projects_ougridd/llm-science-exam_kaggle/.claude/worktrees/agent-ac4ad47f865adc409/reference_reproduction/data/monitor_500.parquet
+
+peak GPU 1.79 GB

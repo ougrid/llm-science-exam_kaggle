@@ -1,0 +1,14 @@
+Loading weights:   0%|          | 0/394 [00:00<?, ?it/s]Loading weights: 100%|██████████| 394/394 [00:00<00:00, 14135.89it/s]
+[eval_shipped] ../models/mgoksu-run-context-2 tag=mgoksu_shipped ctx=context clip=1750 chars, max_length=None
+  batch 100/750 elapsed 42s rate 2.4 b/s eta 276s
+  batch 200/750 elapsed 85s rate 2.4 b/s eta 233s
+  batch 300/750 elapsed 127s rate 2.4 b/s eta 190s
+  batch 400/750 elapsed 168s rate 2.4 b/s eta 147s
+  batch 500/750 elapsed 210s rate 2.4 b/s eta 105s
+  batch 600/750 elapsed 251s rate 2.4 b/s eta 63s
+  batch 700/750 elapsed 293s rate 2.4 b/s eta 21s
+  batch 750/750 elapsed 315s rate 2.4 b/s eta 0s
+
+sequence length actually fed: mean 468 median 458 max 673 (training used 256)
+T1 MAP@3 (n=1500): 0.9170  95% CI [0.9056, 0.9282]  (random 0.3667)
+wrote results for tag=mgoksu_shipped

@@ -1,0 +1,63 @@
+{
+  "tag": "faithful",
+  "context_col": "context",
+  "model": "microsoft/deberta-v3-large",
+  "n_train": 1024,
+  "n_t1": 1500,
+  "max_input": 256,
+  "epochs": 2,
+  "lr": 2e-05,
+  "effective_batch": 16,
+  "t1_map3": 0.377,
+  "t1_ci_lower": 0.3576666666666667,
+  "t1_ci_upper": 0.396,
+  "monitor_map3": 0.4013333333333334,
+  "monitor_ci_lower": 0.368,
+  "monitor_ci_upper": 0.4353333333333333,
+  "random_baseline": 0.36666666666666664,
+  "train_seconds": 746.6,
+  "eval_seconds": 119.1,
+  "peak_gpu_gb": 5.4,
+  "curve": [
+    {
+      "step": 16,
+      "loss": 1.6809425354003906,
+      "monitor_map3": 0.42866666666666664
+    },
+    {
+      "step": 32,
+      "loss": 1.784942626953125,
+      "monitor_map3": 0.417
+    },
+    {
+      "step": 48,
+      "loss": 1.7801895141601562,
+      "monitor_map3": 0.42899999999999994
+    },
+    {
+      "step": 64,
+      "loss": 1.7155303955078125,
+      "monitor_map3": 0.43066666666666664
+    },
+    {
+      "step": 80,
+      "loss": 1.6869049072265625,
+      "monitor_map3": 0.398
+    },
+    {
+      "step": 96,
+      "loss": 1.64337158203125,
+      "monitor_map3": 0.398
+    },
+    {
+      "step": 112,
+      "loss": 1.6430511474609375,
+      "monitor_map3": 0.42233333333333334
+    },
+    {
+      "step": 128,
+      "loss": 1.63128662109375,
+      "monitor_map3": 0.4013333333333334
+    }
+  ]
+}

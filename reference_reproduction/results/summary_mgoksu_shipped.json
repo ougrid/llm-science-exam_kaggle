@@ -1,0 +1,14 @@
+{
+  "tag": "mgoksu_shipped",
+  "model_dir": "../models/mgoksu-run-context-2",
+  "format": "part2_inference",
+  "context_char_clip": 1750,
+  "max_length": null,
+  "seq_len_mean": 467.5466666666667,
+  "seq_len_max": 673,
+  "n_t1": 1500,
+  "t1_map3": 0.917,
+  "t1_ci_lower": 0.9055555555555556,
+  "t1_ci_upper": 0.9282222222222222,
+  "random_baseline": 0.36666666666666664
+}
