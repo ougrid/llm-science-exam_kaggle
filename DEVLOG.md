@@ -1388,4 +1388,94 @@ deferred repeatedly.
 
 ---
 
+## Day 4 (overnight) — a real leaderboard score, and the diagnosis I should have found on day 1
+
+### The score
+
+Two late submissions landed, both the same config, both scored identically:
+
+| Submission | Public | Private |
+|---|---|---|
+| dummy `"A B C"` (day 1, for scale) | 0.375156 | 0.356882 |
+| our retrieval + public reader | **0.761131** | **0.747994** |
+
+Provenance, restated because it travels with the number: the corpus, chunking,
+title-prefixing, BM25 index, query construction and offline pipeline are ours;
+the reader is `mgoksu/llm-science-run-context-2`, a public checkpoint fine-tuned
+by another competitor, permitted by the rules and cited in `CREDITS.md`. This is
+not a model we trained.
+
+**The pre-registered prediction was ~0.86 and it missed by 0.086.** The clean
+gold 200 measured 0.8592 locally / 0.8600 on Kaggle, and the ~4,000-row hidden
+test set came back at 0.7611. The gold set's own CI half-width is ±0.04, so
+**the shortfall is larger than sampling noise on the holdout can explain.**
+Two candidate causes, not separated: the 200-row official set may simply be an
+easier sample, and/or the hidden test distribution differs from it. Logged as a
+miss in `experiments/lb_log.csv` against the prediction rather than reframed
+after the fact. The lesson is the one `PLAN.md`'s validation section already
+states — a 200-row eval cannot resolve anything finer than ~4 points, and I
+leaned on it for a point estimate anyway.
+
+### The overnight runs falsified my own explanation
+
+Two 5-hour runs, ~2,000 optimizer steps each (3.3× the 600 that the previous
+attempt managed), everything else held fixed:
+
+| Run | best MAP@3 | 95% CI |
+|---|---|---|
+| `night-large` (deberta-v3-large, frozen 18/24) | 0.3840 | [0.3649, 0.4036] |
+| `night-base` (deberta-v3-base, frozen 6/12, maxlen 512) | 0.3746 | [0.3558, 0.3937] |
+
+Neither clears the 0.3667 baseline. **Training volume was not the gap**, so the
+"starved optimization" story from the previous entry is wrong too. That is the
+third failed explanation for the same symptom.
+
+### What it actually was: a train/eval source mismatch I introduced myself
+
+Two lines of pandas, which were computable on day 1:
+
+```
+T1 dev (eval):      source 2 = 1,397/1,500 (93%),   source 1 = 103
+39,249-row pool:    source 2 =   4,586     (11.7%), source 3 = 14,824 (38%)
+```
+
+cdeotte's `all_12_with_context2.csv` merges twelve generators whose question and
+context styles differ. We trained on a pool that is 11.7% source-2 and evaluated
+on a set that is 93% source-2 — a real covariate shift, not a cosmetic one.
+
+**And this project had already found and fixed this once.** Row 5 of
+`reports/ablation_table.md` — MAP@3 0.6086 [0.5880, 0.6291], still the best
+own-model number here — was trained on a source-**matched** slice of exactly
+4,586 rows, which is precisely source 2's count. When I scaled the pool
+4,978 → 39,249 rows chasing "more data", I traded the distribution match for
+volume and silently regressed a fix that was already in the log. Every reader
+conclusion drawn after that point was measured on a broken setup.
+
+### The pattern worth naming
+
+Four explanations, in order: *reader never trained* (wrong — `ln(5)` loss means
+uncalibrated, not unlearned), *failure is over-determined* (wrong — padding
+around the real cause), *starved of optimizer steps* (wrong — falsified by 3.3×
+the steps), *train/eval source mismatch* (supported, and previously known).
+
+Each wrong version had confident arithmetic behind it. The failure was never
+rigor within a step; it was **theorising about model behaviour before checking
+that the training and evaluation data were drawn from the same distribution** —
+and, twice, before re-reading what this project's own log already said. The two
+measurements that actually discriminated (a known-good reader on our context;
+a `value_counts()` on the source column) were both cheap and both available from
+the start.
+
+That is the finding I would lead with in an interview, ahead of any score.
+
+### Running now
+
+`ougridd/day4-src2-train`: the source-matched 4,586 rows, with **our**
+general-corpus retrieval so train and eval retrieval match by construction,
+frozen-layer recipe, 12 epochs ≈ 3,400 optimizer steps, 4h budget. It is the
+clean test of the mismatch hypothesis. Beat targets: 0.3840 (ours, fails
+baseline) and row 5's 0.6086 on cdeotte's context.
+
+---
+
 <!-- Append new entries above this line as work continues. -->

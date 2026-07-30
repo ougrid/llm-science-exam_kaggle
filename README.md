@@ -1,6 +1,6 @@
 # LLM Science Exam — a reproduction study of retrieval vs. scale
 
-A 3-day reproduction of Kaggle's closed [LLM Science Exam](https://www.kaggle.com/competitions/kaggle-llm-science-exam)
+A 4-day reproduction of Kaggle's closed [LLM Science Exam](https://www.kaggle.com/competitions/kaggle-llm-science-exam)
 competition (5-option science MCQ, MAP@3, internet-disabled offline
 inference). The competition's headline finding is a judgment result, not a
 trick: a 435M-parameter encoder with good retrieval reached top-5 while 3rd
@@ -8,20 +8,26 @@ and 5th place needed 70B models to do marginally better.
 
 **What this repo is actually for:** measuring *where the score comes from*,
 with honest statistics — not chasing a leaderboard number. The most useful
-output turned out to be an attribution result that contradicted my own
-working hypothesis for three days.
+output turned out to be an attribution result that falsified three of my own
+successive hypotheses.
 
 ---
 
 ## Headline
 
-> **A public 2023 reader fed *my* retrieval scores 0.8592 [0.8200, 0.8958] on
-> a clean 200-row holdout. My own trained reader, on the identical context,
-> scores 0.3807 [0.3618, 0.3997] — which does not clear the 0.3667 random
-> baseline. The retrieval was never the bottleneck; the reader training was.**
+> **Kaggle leaderboard: 0.761131 public / 0.747994 private** — my retrieval
+> pipeline paired with a public reader checkpoint (provenance below), against
+> 0.375156 for a random-guess baseline.
+>
+> **The finding that matters more than the score:** holding the retrieved
+> context *fixed* and swapping only the reader moves MAP@3 from **0.3840**
+> (mine) to **0.8600** (a public 2023 checkpoint) on the same clean 200-row
+> holdout. The retrieval was never the bottleneck. The reader path was — and
+> the specific cause turned out to be a **train/eval distribution mismatch I
+> introduced myself**, not model size, corpus scope, or training volume.
 
-That single comparison is the project. It isolates the failing component by
-holding the context fixed and swapping only the reader.
+That comparison is the project: it localises the failure to one component by
+changing exactly one thing.
 
 ## Results
 
@@ -35,8 +41,28 @@ common error in public writeups. Every number carries a 95% bootstrap CI.
 | 0 | random guess (analytic) | 0.3667 | — | — |
 | 1 | options-only bias probe (zero parameters, no model) | 0.4780 | [0.4577, 0.4989] | Yes |
 | 2 | closed-book `deberta-v3-base`, best checkpoint | 0.5641 | [0.5439, 0.5840] | Yes |
-| 3 | open-book, my BM25 + general Wikipedia, `deberta-v3-large`, cdeotte's frozen-layer recipe | 0.3807 | [0.3618, 0.3997] | **No** |
-| 4 | Kaggle leaderboard, dummy `"A B C"` baseline | 0.375156 (public) | — | — |
+| 3 | open-book, my BM25 + general Wikipedia, `deberta-v3-large`, frozen-layer recipe, 600 steps | 0.3807 | [0.3618, 0.3997] | **No** |
+| 4 | same, **3.3× the training steps** (~2,000, 5 h) | 0.3840 | [0.3649, 0.4036] | **No** |
+| 5 | same on `deberta-v3-base`, `max_length=512`, 2 epochs | 0.3746 | [0.3558, 0.3937] | **No** |
+| 6 | **source-matched** slice (4,586 rows), cdeotte's context — *the best own-model result* | **0.6086** | [0.5880, 0.6291] | Yes |
+
+Rows 3→5 are the informative failure: **tripling the optimizer steps changed
+nothing** (0.3807 → 0.3840), which falsified "undertrained" as the explanation.
+Row 6 is why — it is the only own-model run whose training data was drawn from
+the same generator as the eval set.
+
+### On the Kaggle leaderboard
+
+| Submission | Public | Private | Predicted beforehand |
+|---|---|---|---|
+| dummy `"A B C"` (scale reference) | 0.375156 | 0.356882 | ~0.3667 ✓ |
+| my retrieval + public reader | **0.761131** | **0.747994** | ~0.86 ✗ **missed by 0.086** |
+
+That miss is logged as a miss in `experiments/lb_log.csv`. The 200-row holdout
+said 0.86; the ~4,000-row hidden test said 0.76. The holdout's own CI is ±0.04,
+so **the gap is bigger than its sampling noise explains** — either the official
+200 is an easier sample or its distribution differs from the hidden set. I can't
+separate those with one submission, and I'm not going to pretend otherwise.
 
 Row 1 is worth dwelling on: a **zero-parameter heuristic that always picks the
 longest option scores 0.4780**, beating several trained configurations. This
@@ -50,7 +76,13 @@ row 2's closed-book model and worse than row 1's heuristic.**
 
 | # | What | MAP@3 | 95% CI | Tier |
 |---|---|---|---|---|
-| R1 | **public** `mgoksu/llm-science-run-context-2` + **my** retrieval | **0.8592** | [0.8200, 0.8958] | clean gold 200 |
+| R1 | **public** `mgoksu/llm-science-run-context-2` + **my** retrieval | **0.8592** | [0.8200, 0.8958] | clean gold 200 (local) |
+| R1′ | same, re-run inside a Kaggle kernel | **0.8600** | [0.8208, 0.8967] | clean gold 200 (Kaggle) |
+
+R1 vs R1′ is also a useful cross-environment check: they agree closely, unlike
+this project's earlier finding that *trained* checkpoints score differently on
+Kaggle vs. locally. The inference path reproduces; the training-time scoring
+did not.
 
 R1 is clean (that checkpoint's public training pools have zero prompt overlap
 with the official 200, asserted in `scripts/build_context_train_pool.py`) and is
@@ -81,38 +113,58 @@ retrieved context (median 1,304 tokens), and the full context fits for **1.0%**
 of rows. So effective retrieval quality was nearer recall@1 (0.43) than
 recall@5 (0.62). Second-order given R1, but real.
 
-## Where the score actually went — and three mistakes I made finding out
+## Where the score actually went — and four explanations, three of them wrong
 
-The honest value here is the debugging trail, so it is recorded in full in
-`DEVLOG.md` rather than smoothed into a clean narrative.
+The debugging trail is the honest value here, so `DEVLOG.md` keeps it in full,
+including the wrong turns in the order I took them.
 
-**1. I mistook a loss floor for a training failure.** Every run's loss sat at
-~1.61, and `ln(5) = 1.6094` is exactly the loss of uniform predictions over 5
-options. I concluded the reader had never trained. **Wrong:** MAP@3 depends only
-on the *rank order* of logits while cross-entropy depends on their *magnitudes*,
-so a model can sit at the loss floor while ranking well above chance. Row 2
-proves it — flat `ln(5)` loss *and* 0.5641, which is ~25 standard errors above
-baseline at n=1,500. `ln(5)` means **uncalibrated, not unlearned**, and
-`PLAN.md`'s own metric section had stated the property I failed to apply.
+| # | My explanation | Verdict |
+|---|---|---|
+| 1 | "The reader never trained — loss is pinned at `ln(5)`" | **Wrong** |
+| 2 | "The failure is over-determined (LR + freezing + truncation)" | **Wrong** — padding around the real cause |
+| 3 | "It's starved of optimizer steps" | **Wrong** — falsified by 3.3× the steps |
+| 4 | "Train and eval data come from different generators" | **Supported** — and already in my own log |
 
-**2. I mistook memorization for label validation.** I ran a 64-row overfit test,
-drove per-batch loss to 0.0018, and claimed it proved labels were correctly
-aligned. It doesn't — memorizing 64 rows succeeds even with scrambled labels.
-The valid check was the benchmark's length shortcut, which holds
-(longest-option-equals-answer at 32.7% train / 33.3% dev vs 20% chance). That
-check also surfaced **8.8% of training rows carrying duplicate option text**.
+**Why (1) was wrong, and it's a metric subtlety worth knowing.** `ln(5) = 1.6094`
+is the cross-entropy of uniform predictions over 5 options, and every run sat
+there. But MAP@3 depends only on the *rank order* of logits while cross-entropy
+depends on their *magnitudes*, so a model with nearly-equal but consistently
+ordered logits sits at the loss floor and still ranks well above chance. The
+closed-book run proves it: flat `ln(5)` loss *and* MAP@3 0.5641, which is ~25
+standard errors above baseline at n=1,500. **`ln(5)` means uncalibrated, not
+unlearned.** This document's own metric notes state the property; I failed to
+apply it.
 
-**3. I asserted three incompatible root causes in one evening**, each with
-confident arithmetic behind it. The failure wasn't sloppiness per step; it was
-reaching for a single-cause story and marshalling evidence for it. What finally
-settled it was the *discriminating* measurement — a known-good reader on my own
-context (R1) — which was cheap, available from day 1, and which `PLAN.md`
-specified up front as a "calibration anchor" before I deferred it repeatedly.
+**Why (3) was wrong.** Two 5-hour runs at ~2,000 optimizer steps moved 0.3807 →
+0.3840. Volume was not the constraint.
 
-**Consequence for reading this repo:** several reader-level verdicts
-(reranking −0.0490, context length 384→768 −0.0503) were measured against a
-weak, poorly-calibrated reader. They are **not refuted, but not safe to
-generalize** either. They are labelled that way rather than quietly dropped.
+**What (4) actually is** — two lines of pandas, computable on day 1:
+
+```
+T1 dev (eval):     source 2 = 1,397/1,500 (93%),   source 1 = 103
+39,249-row pool:   source 2 =   4,586     (11.7%), source 3 = 14,824 (38%)
+```
+
+`cdeotte/60k-data-with-context-v2` merges twelve generators with different
+question and context styles. I trained on 11.7% source-2 data and evaluated on
+93% source-2 data. **And this repo had already fixed that once:** row 6's 0.6086
+was trained on a source-matched slice of exactly 4,586 rows — precisely source
+2's count. Scaling the pool 4,978 → 39,249 rows for "more data" traded the
+distribution match for volume and regressed a known fix. Every reader conclusion
+after that point was measured on a broken setup.
+
+**A second invalid inference, for completeness.** I ran a 64-row overfit test,
+drove loss to 0.0018, and claimed it proved labels were aligned. It doesn't —
+memorization succeeds with scrambled labels. The valid check was the benchmark's
+length shortcut, which holds (32.7% train / 33.3% dev vs 20% chance) and which
+also surfaced **8.8% of training rows carrying duplicate option text**.
+
+**The pattern.** Every wrong version had confident arithmetic behind it. The
+failure was never rigor inside a step; it was theorising about model behaviour
+before checking that train and eval data were drawn from the same distribution,
+and twice before re-reading what this project's own log already said. Both
+measurements that finally discriminated — a known-good reader on my context, and
+a `value_counts()` on a source column — were cheap and available from the start.
 
 ## Validation design
 

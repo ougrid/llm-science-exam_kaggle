@@ -1,0 +1,14 @@
+{
+  "id": "ougridd/day4-src2-train",
+  "title": "day4 src2 train",
+  "code_file": "script.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": ["ougridd/llmsci-src2-own-context"],
+  "competition_sources": [],
+  "kernel_sources": []
+}
