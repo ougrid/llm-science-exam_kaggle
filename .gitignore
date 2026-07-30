@@ -29,3 +29,6 @@ kaggle.json
 .DS_Store
 .vscode/
 .idea/
+
+# Claude Code agent worktrees (isolated checkouts, not project content)
+.claude/
