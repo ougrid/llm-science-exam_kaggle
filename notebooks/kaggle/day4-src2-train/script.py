@@ -207,7 +207,22 @@ def main() -> None:
     print(f"device: {device}, gpu count: {torch.cuda.device_count()}, random-guess loss={RANDOM_LOSS:.4f}")
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForMultipleChoice.from_pretrained(MODEL_NAME).to(device)
+    # `dtype=torch.float32` is LOAD-BEARING, not defensive. transformers 5.x
+    # defaults from_pretrained to the CHECKPOINT's stored dtype, and both
+    # deberta-v3-base and -large ship fp16 -- so the bare call returns fp16
+    # PARAMETERS. That is not mixed precision (fp16 compute, fp32 master
+    # weights); it is half-precision weights that AdamW updates in place, and it
+    # silently cannot train: at lr=2e-5, an update is ~1.3 ULP for a weight near
+    # 0.03 and BELOW HALF A ULP for any weight >= 0.1, so it rounds to nothing.
+    # Measured on this recipe: max|delta| after one step was 1.072e-01 in fp16
+    # (ULP-snapped garbage) versus a correct 2.001e-05 in fp32.
+    # This is what pinned train_loss at ln(5)=1.6094 through four separate runs
+    # while gradients, optimizer, labels, context and input format were all fine.
+    model = AutoModelForMultipleChoice.from_pretrained(MODEL_NAME, dtype=torch.float32).to(device)
+    bad = {p.dtype for p in model.parameters() if torch.finfo(p.dtype).bits < 32}
+    if bad:
+        raise RuntimeError(f"refusing to train {sorted(str(d) for d in bad)} parameters; see above")
+    print(f"param dtype: {sorted(str(d) for d in {p.dtype for p in model.parameters()})}", flush=True)
 
     # Freeze embeddings + the first N encoder layers (cdeotte part 2's recipe).
     total_params = sum(p.numel() for p in model.parameters())

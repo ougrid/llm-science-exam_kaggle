@@ -1537,4 +1537,168 @@ quota does not get spent at all.
 
 ---
 
+## Day 4 — the fifth hypothesis, and the one that was actually true: fp16 weights
+
+Four explanations for one symptom, all wrong, all mine. This is the fifth, and
+it is not a theory — it is a measured, one-line library default.
+
+**The symptom, restated as precisely as I can:** every training run this project
+has done pins `train_loss` at ln(5) = 1.6094. Not "converges near it" —
+1.6118, 1.6126, 1.6138, 1.6140, 1.6164, 1.6173 across a thousand optimizer steps
+and four epochs of 4,586 rows, with 77.2M trainable parameters.
+
+**The cause:** `transformers` 5.14.1 makes `from_pretrained` follow the
+CHECKPOINT's stored dtype. Both `microsoft/deberta-v3-base` and
+`microsoft/deberta-v3-large` ship fp16. So
+
+    AutoModelForMultipleChoice.from_pretrained("microsoft/deberta-v3-large")
+
+returns fp16 **parameters** — not fp16 compute with fp32 master weights, which
+is what mixed precision means, but genuinely half-precision weights that AdamW
+then updates in place. Under `transformers` 4.x the identical line returned fp32.
+Our `pyproject.toml` said `transformers>=4.46` with no upper bound.
+
+### Why that pins loss at exactly ln(5)
+
+An AdamW step at step 1 has magnitude ≈ lr, because m̂/√v̂ = sign(g). So the only
+question is whether lr is *representable* as a change to the weight. Measured,
+20 steps at lr=2e-5 with a constant-sign gradient — the easiest possible case:
+
+| weight magnitude | fp16 total movement | fp32 total movement |
+|---|---|---|
+| 0.01 | 4.58e-04 (overshoots 14%) | 4.00e-04 |
+| 0.03 | 3.05e-04 (76% of intended) | 4.00e-04 |
+| **0.10** | **0.00e+00 — frozen** | 4.00e-04 |
+| **0.30** | **0.00e+00 — frozen** | 4.00e-04 |
+
+fp16 ULP grows with magnitude, so the *larger* a weight is, the smaller lr looks
+beside it. At w ≥ 0.1 the update is below half a ULP and rounds to nothing —
+not slow training, literally zero movement forever. DeBERTa's LayerNorm weights
+sit near 1.0. Most of the network was frozen solid; only the small-magnitude
+head weights moved, and those moved in erratic ULP jumps.
+
+On our actual recipe, one AdamW step at lr=2e-5:
+
+| dtype | max\|Δ\| on classifier.weight | correct |
+|---|---|---|
+| fp16 | 1.072e-01 (ULP-snapped garbage) | 2e-5 |
+| fp32 | **2.001e-05** | 2e-5 |
+
+And an overfit test on **sixteen rows**, 60 steps, same data, same recipe:
+
+| dtype | loss trajectory | outcome |
+|---|---|---|
+| fp16 | 1.53 → 4.32 → 1.89 → 1.57 → 1.5687 | parked at ln(5) |
+| **fp32** | 1.68 → 1.61 → 1.24 → 0.47 → 0.08 → **0.1013** | **learns** |
+
+One variable. Same 16 rows, same recipe, same lr, same 60 optimizer steps at
+micro-batch 1 × accum 16, same maxlen 128. fp32 memorises the slice to loss
+0.10; fp16 cannot leave the uniform-prediction fixed point. That is the whole
+diagnosis in two lines.
+
+### It explains everything, including what falsified the earlier theories
+
+This is the part that matters. A fifth theory that only explained the fifth
+observation would be worthless. This one is retrodictive:
+
+- **ln(5) in every run, on both a T4 and a Blackwell card** — because it is a
+  library default, not hardware.
+- **Why 3.3× more steps changed nothing** (hypothesis 3, falsified by two
+  5-hour overnight runs): no number of updates that round to zero ever adds up.
+- **Why source-matching the pool changed nothing** (hypothesis 4): the data was
+  never the problem, which cells A/B/C below proved independently.
+- **Why inference was always fine** — 0.7970 on the gate, 0.8592 on the gold
+  200, 0.761131 on the real leaderboard. fp16 *forward* passes are fine and
+  faster. Only the optimizer breaks.
+- **Why the public checkpoint works**: somebody else trained it in fp32; we only
+  ever ran it forward.
+- **The 0.5641 closed-book peak that then decayed** — "learn fast, forget fast",
+  which I withdrew as an artifact and then reinstated. Now it has a mechanism:
+  the classifier and pooler weights are small-magnitude (~0.02–0.06), exactly
+  the regime where fp16 *does* move, at 76–114% of the intended step. So the
+  head could learn while the encoder sat frozen. A head-only model peaking at
+  0.56 and then degrading as ULP rounding accumulates is precisely that shape.
+- **Row 6's 0.6086, still the project's best own-model result** — same story,
+  head-only learning on well-matched data. That was never a ceiling on the
+  recipe; it was the ceiling on a frozen encoder.
+
+`transformers-5.14.1.dist-info` is dated 2026-07-29 21:07, before the first
+`data/` file was written at 20:32 the same evening. This was never a mid-flight
+upgrade. **Every training run in this project, from the first, trained fp16
+weights.** There is no earlier era of correct runs to compare against.
+
+### What I had to rule out first, and the hole that let this survive
+
+The gate I built the previous session (`scripts/hypothesis_gate.py`) passed in
+full: context aligned 25/25 on both files, answer-support recall 0.6433 train vs
+0.6133 eval, known-good reader 0.7970 on our eval set. And the very next GPU run
+still pinned at ln(5).
+
+The gate's three checks all interrogated the DATA — because all four of my
+hypotheses had blamed the data. Nothing looked at the model's own parameters.
+`scripts/diagnose_train_data_and_format.py` closed the two remaining data-side
+gaps with a 3-cell design, each cell one variable from the 0.7970 reference:
+
+| cell | MAP@3 |
+|---|---|
+| A eval file + gate format (control) | 0.7970 [0.7687, 0.8247] |
+| B **train** file + gate format | 0.8037 [0.7743, 0.8320] |
+| C eval file + **training** format | 0.7947 [0.7657, 0.8240] |
+
+All three overlap. The training pool's labels are correct, its context supports
+its answers, and our training input format costs essentially nothing — even
+though it swaps the layout and drops maxlen 512→384 against a reader fine-tuned
+on the other layout. Truncation was a red herring too: the gate format shows the
+model 416 context tokens, the training format 348. A 16% haircut, not the 72% the
+naive ratio suggests.
+
+So the data surface was exhausted, and `scripts/diagnose_optimizer_path.py` found
+gradients healthy (frozen groups all `grad=None`, classifier 3.83, pooler 4.26,
+layers 18–23 in 0.08–0.41) and the optimizer covering the right 77.2M params.
+The only anomaly left was the *magnitude* of the update: 1.072e-01 where lr was
+2e-5. That number is what cracked it.
+
+### The lesson, which is not "check your dtypes"
+
+Four hypotheses, four wrong, and every single one located the fault in the data.
+Each had arithmetic behind it. What none of them had was a measurement capable of
+coming back negative. Cell B was the first check I ran that could have exonerated
+the data, and it did so immediately — on the first try, in five minutes, using an
+instrument I had already built and already had in hand.
+
+The generalisable failure is not a missing dtype check. It is that I kept
+generating hypotheses inside one category and never asked what category the
+evidence itself pointed at. `train_loss` — not eval MAP@3 — was the tell from the
+very first run: 77.2M trainable parameters cannot fail to reduce *training* loss
+on 4,586 rows across four epochs. Every run printed that number, and I read it
+four times as "the data must be wrong" instead of "the weights are not moving."
+
+### Fixes landed
+
+- `dtype=torch.float32` on all 17 training-path model loads (10 local scripts,
+  8 Kaggle kernels, `gpu_guard`'s speed probe).
+- `llmsci.reader.mc.assert_trainable_dtype()` + `load_mc_model_for_training()`,
+  which refuse to return a sub-fp32-parameter model and name both the symptom
+  and the fix in the error. Inline equivalents in the Kaggle kernels, which
+  cannot import `src/`.
+- `tests/test_trainable_dtype.py` — 10 tests asserting the mechanism itself
+  (frozen at w ≥ 0.1, ULP-quantized when it does move, ln(5) is the uniform-
+  prediction loss). Runs in 3 s. The check that would have saved four GPU runs
+  was always this cheap.
+- `hypothesis_gate.py` check **0**, running first, on the principle the gate
+  earned the hard way: a passing data gate is not evidence training is possible.
+- Inference paths deliberately left in fp16 — proven correct at 0.761131 on the
+  leaderboard, and half the memory.
+
+### One more thing worth recording, found in passing
+
+On WSL2, exceeding VRAM raises `RuntimeError: CUDA driver error: device not
+ready`, **not** `torch.OutOfMemoryError`. Our submission scripts catch
+`torch.OutOfMemoryError` to fall back to CPU; that handler would not fire.
+Measured local ceiling for deberta-v3-large + backward at maxlen 384: batch 1
+peaks 4.20 GiB and works, batch 2 fails. fp32 doubles it, so the local card
+cannot run the kernel's own config — the fp32 arms above ran at maxlen 128–256.
+
+---
+
 <!-- Append new entries above this line as work continues. -->

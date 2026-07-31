@@ -30,7 +30,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoModelForMultipleChoice, AutoTokenizer, get_linear_schedule_with_warmup
 
 from llmsci.gpu_guard import cap_memory_fraction
-from llmsci.reader.mc import DataCollatorForMultipleChoice, MultipleChoiceDataset
+from llmsci.reader.mc import DataCollatorForMultipleChoice, MultipleChoiceDataset, assert_trainable_dtype
 
 DATA = Path("data")
 MODEL_NAME = "microsoft/deberta-v3-base"
@@ -53,7 +53,8 @@ def main() -> None:
         cap_memory_fraction(0.975)
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForMultipleChoice.from_pretrained(MODEL_NAME).to(device)
+    model = AutoModelForMultipleChoice.from_pretrained(MODEL_NAME, dtype=torch.float32).to(device)
+    assert_trainable_dtype(model)  # fp16 params silently cannot train; see mc.py
 
     df = pd.read_parquet(DATA / "train_pool_own_context_general_big.parquet")
     df = df.sample(n=min(N_ROWS, len(df)), random_state=SEED).reset_index(drop=True)

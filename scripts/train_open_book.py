@@ -29,7 +29,7 @@ from transformers import AutoModelForMultipleChoice, AutoTokenizer, get_linear_s
 from llmsci.experiment import git_sha, log_experiment
 from llmsci.gpu_guard import cap_memory_fraction, probe_training_speed
 from llmsci.metrics import average_precision_scores, bootstrap_ci, random_baseline_map_at_k
-from llmsci.reader.mc import DataCollatorForMultipleChoice, MultipleChoiceDataset, logits_to_ranked_labels
+from llmsci.reader.mc import DataCollatorForMultipleChoice, MultipleChoiceDataset, logits_to_ranked_labels, assert_trainable_dtype
 
 DATA = Path("data")
 CHECKPOINT_DIR = DATA / "checkpoints" / "deberta-v3-base-open-book-final"
@@ -87,7 +87,8 @@ def main() -> None:
         probe_training_speed(MODEL_NAME, BATCH_SIZE, 5, MAX_LENGTH, device, MAX_MS_PER_STEP)
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForMultipleChoice.from_pretrained(MODEL_NAME).to(device)
+    model = AutoModelForMultipleChoice.from_pretrained(MODEL_NAME, dtype=torch.float32).to(device)
+    assert_trainable_dtype(model)  # fp16 params silently cannot train; see mc.py
 
     train_df = pd.read_parquet(DATA / "train_pool_context.parquet")
     train_df = train_df.sample(n=N_TRAIN_SUBSET, random_state=SEED).reset_index(drop=True)

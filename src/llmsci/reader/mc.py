@@ -110,3 +110,54 @@ def logits_to_ranked_labels(
     option_columns = option_columns or OPTION_COLUMNS
     order = np.argsort(-logits, axis=1)
     return [[option_columns[i] for i in row[:k]] for row in order]
+
+
+def assert_trainable_dtype(model, min_bits: int = 32) -> None:
+    """Fail loudly if a model's PARAMETERS are too low-precision to train.
+
+    Guards against a regression that silently produced four failed training runs
+    in this project. `transformers` 5.x changed the `from_pretrained` default to
+    follow the CHECKPOINT's stored dtype; `microsoft/deberta-v3-large` ships
+    fp16, so the plain call returns fp16 *parameters* -- not fp16 compute with
+    fp32 master weights, which is what mixed precision means, but genuinely
+    half-precision weights that AdamW then tries to update in place. Under
+    transformers 4.x the identical line returned fp32.
+
+    Why that cannot train, in one line of arithmetic: an AdamW step is ~lr in
+    magnitude at step 1, so lr=2e-5 against an fp16 ULP of 2^-16 = 1.5e-5 for a
+    weight near 0.03 makes every update ~1.3 ULP. Updates round to zero or snap
+    by one representable increment, the model never leaves the uniform-prediction
+    fixed point, and training loss pins at ln(5) = 1.6094 for a 5-option task
+    while gradients, the optimizer, and the data are all perfectly healthy.
+
+    Inference is unaffected -- fp16 forward passes are fine and faster -- so this
+    is specifically a guard for training entry points.
+    """
+    dtypes = {p.dtype for p in model.parameters()}
+    bad = {d for d in dtypes if torch.finfo(d).bits < min_bits}
+    if bad:
+        example = next(iter(bad))
+        ulp = float(
+            torch.tensor(0.03, dtype=example).nextafter(torch.tensor(1.0, dtype=example)) - 0.03
+        )
+        raise RuntimeError(
+            f"model parameters are {sorted(str(d) for d in bad)}, which cannot be trained: "
+            f"ULP near a weight of 0.03 is {ulp:.2e}, so a typical lr=2e-5 AdamW update is "
+            f"~{2e-5 / ulp:.1f} ULP and rounds away. Training loss will pin at ln(5). "
+            f"Load with `from_pretrained(..., dtype=torch.float32)` and use autocast/GradScaler "
+            f"if you want fp16 speed with fp32 master weights."
+        )
+
+
+def load_mc_model_for_training(name_or_path, device=None, dtype=torch.float32):
+    """`AutoModelForMultipleChoice` with an EXPLICIT dtype, verified fp32-trainable.
+
+    Always pass dtype explicitly rather than relying on the library default: the
+    default is version-dependent (see assert_trainable_dtype) and changed under
+    this project mid-flight.
+    """
+    from transformers import AutoModelForMultipleChoice
+
+    model = AutoModelForMultipleChoice.from_pretrained(name_or_path, dtype=dtype)
+    assert_trainable_dtype(model)
+    return model.to(device) if device is not None else model

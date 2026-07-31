@@ -1,5 +1,36 @@
 # Limitations
 
+## The reader results in this repo measure a bug, not a recipe (2026-07-31)
+
+Superseding everything below about reader training. Every training run in this
+project loaded **fp16 parameters** (`transformers` 5.x follows the checkpoint
+dtype; `deberta-v3` ships fp16), which AdamW cannot move: at lr=2e-5 an update is
+~1.3 ULP near a weight of 0.03 and exactly zero for weights ≥ 0.1. Controlled,
+one-variable test on 16 rows over 60 steps: fp16 parks at ln(5)=1.6094, fp32
+reaches 0.1013.
+
+What this does and does not invalidate:
+
+- **Invalidated:** every own-trained-reader number, including row 6's 0.6086 and
+  the 0.5641 closed-book peak. Those measure a frozen encoder with a trainable
+  head — the small head weights are the one magnitude regime where fp16 still
+  moves. The "reader-attributable loss of 0.4130" is real as an *observation* but
+  its cause was this bug, not undertraining.
+- **Not invalidated:** all retrieval measurements (CPU, no optimizer), the
+  public-checkpoint anchors, and the leaderboard result 0.761131 / 0.747994.
+  fp16 *inference* is correct and half the memory, so inference paths keep it.
+- **Still unknown:** what this pipeline scores with a genuinely trained reader.
+  That is now a single fixed run away, and it is honestly reported as unmeasured
+  rather than estimated.
+
+The generalisable limitation is a process one, and it is the one worth stating:
+four successive hypotheses all located the fault in the data, each with
+arithmetic behind it, and not one was a measurement that could have come back
+negative. `train_loss` pinned at ln(num_options) was in every run's log from the
+first day and is decisive on its own — a model with 77.2M trainable parameters
+cannot fail to reduce *training* loss on 4,586 rows over four epochs.
+
+
 Grounded in what was actually found this session, not a generic checklist.
 
 ## ⚠ The single largest limitation, found on the last day: the reader, not retrieval, is the bottleneck

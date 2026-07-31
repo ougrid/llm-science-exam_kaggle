@@ -95,7 +95,7 @@ def probe_training_speed(
     committing to a run that might silently take 100x longer than expected.
     Frees its GPU memory before returning.
     """
-    probe_model = AutoModelForMultipleChoice.from_pretrained(model_name).to(device)
+    probe_model = AutoModelForMultipleChoice.from_pretrained(model_name, dtype=torch.float32).to(device)
     probe_model.train()
     probe_optimizer = torch.optim.AdamW(probe_model.parameters(), lr=lr, eps=eps)
 

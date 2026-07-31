@@ -32,7 +32,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from llmsci.gpu_guard import cap_memory_fraction
-from llmsci.reader.mc import DataCollatorForMultipleChoice, MultipleChoiceDataset
+from llmsci.reader.mc import DataCollatorForMultipleChoice, MultipleChoiceDataset, assert_trainable_dtype
 from transformers import AutoModelForMultipleChoice, AutoTokenizer
 
 DATA = Path("data")
@@ -48,7 +48,8 @@ RANDOM_LOSS = math.log(5)
 def run_one(lr: float, df: pd.DataFrame, device) -> list[float]:
     torch.manual_seed(0)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForMultipleChoice.from_pretrained(MODEL_NAME).to(device)
+    model = AutoModelForMultipleChoice.from_pretrained(MODEL_NAME, dtype=torch.float32).to(device)
+    assert_trainable_dtype(model)  # fp16 params silently cannot train; see mc.py
     collator = DataCollatorForMultipleChoice(tokenizer)
     ds = MultipleChoiceDataset(df, tokenizer, max_length=MAX_LENGTH, context_col="context")
     loader = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collator)

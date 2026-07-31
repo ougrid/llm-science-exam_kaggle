@@ -120,14 +120,58 @@ training. Scores badly → the data is the problem and no training run can help.
 
 | Check | Cost | Result |
 |---|---|---|
+| Trainable parameter dtype | **ms** | **fp16 — untrainable** (added after the gate failed; see below) |
 | Row/context alignment | seconds | 25/25 exact — no silent row shift |
 | Train vs eval context quality | seconds | 0.6433 vs 0.6133, CIs overlap — comparable |
 | Known-good reader on target eval | ~5 min | 0.7970 — data is learnable |
 
-Standing rule now: **no GPU run without the gate passing first.** Below 0.5 on
-the third check, the quota isn't spent at all. Each of my three wrong
-hypotheses — "never trained", "over-determined", "starved of steps" — would have
-died in minutes against it.
+Standing rule: **no GPU run without the gate passing first.**
+
+### The gate passed, and the next run still failed
+
+Worth keeping, because it is the most useful thing in this repo. All three
+original checks passed in full — and the next GPU run pinned at ln(5) anyway.
+Every check interrogated the *data*, because all four of my hypotheses had blamed
+the data. Nothing looked at the model's own parameters.
+
+The cause was one library default. `transformers` 5.x makes `from_pretrained`
+follow the **checkpoint's** stored dtype, and `deberta-v3-base`/`-large` both
+ship fp16, so the bare call returns fp16 **parameters** — not mixed precision,
+but half-precision weights AdamW updates in place. Under 4.x the same line gave
+fp32; `pyproject.toml` said `transformers>=4.46` with no upper bound.
+
+Measured, 20 AdamW steps at lr=2e-5 with a constant-sign gradient:
+
+| weight magnitude | fp16 movement | fp32 movement |
+|---|---|---|
+| 0.03 | 3.05e-04 (76% of intended) | 4.00e-04 |
+| **≥ 0.10** | **0.00e+00 — frozen** | 4.00e-04 |
+
+fp16 ULP grows with magnitude, so larger weights freeze completely. DeBERTa's
+LayerNorm weights sit near 1.0. One step on the real recipe moved
+`classifier.weight` by `1.072e-01` in fp16 versus a correct `2.001e-05` in fp32.
+
+It is retrodictive, which is why I trust it: it explains ln(5) on both a T4 and a
+Blackwell card (a library default, not hardware), why 3.3× more steps changed
+nothing, why source-matching changed nothing, why *inference* was always fine
+(0.761131 on the real leaderboard — fp16 forward passes are fine), and why the
+0.5641 closed-book peak decayed and row 6 topped out at 0.6086: the small
+head weights are the one regime where fp16 does move, so the head learned while
+the encoder stayed frozen.
+
+Three things I would want an interviewer to take from this:
+
+1. **`train_loss`, not eval MAP@3, was the tell from run #1.** 77.2M trainable
+   parameters cannot fail to reduce *training* loss on 4,586 rows over four
+   epochs. Every run printed it. I read it four times as "the data is wrong."
+2. **Four hypotheses, four wrong, all in the same category.** Each had arithmetic
+   behind it; none was a measurement that could come back *negative*. The check
+   that finally cleared the data — a known-good reader scored on my *training*
+   file — took five minutes with an instrument already built.
+3. **The fix is 3 s of tests** (`tests/test_trainable_dtype.py`, asserting the
+   mechanism: frozen at w ≥ 0.1, ULP-quantized when it moves, ln(5) = uniform-
+   prediction loss). The check that would have saved four GPU runs was always
+   this cheap. Full narrative in `DEVLOG.md`, "the fifth hypothesis".
 
 ## Retrieval, measured independently of the reader
 

@@ -206,7 +206,14 @@ def main() -> None:
     print(f"device: {device}, gpu count: {torch.cuda.device_count()}, random-guess loss={RANDOM_LOSS:.4f}")
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForMultipleChoice.from_pretrained(MODEL_NAME).to(device)
+    model = AutoModelForMultipleChoice.from_pretrained(MODEL_NAME, dtype=torch.float32).to(device)
+    # transformers 5.x follows the checkpoint dtype and deberta-v3 ships fp16, so
+    # a bare from_pretrained yields fp16 PARAMETERS, which AdamW cannot move: at
+    # lr=2e-5 an update is ~1.3 ULP near a weight of 0.03 and sub-half-ULP for any
+    # weight >= 0.1. That pinned train_loss at ln(5) across four runs.
+    bad = {p.dtype for p in model.parameters() if torch.finfo(p.dtype).bits < 32}
+    if bad:
+        raise RuntimeError(f"refusing to train {sorted(str(d) for d in bad)} parameters")
 
     # Freeze embeddings + the first N encoder layers (cdeotte part 2's recipe).
     total_params = sum(p.numel() for p in model.parameters())

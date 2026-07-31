@@ -12,8 +12,22 @@ scores well on a dataset, that dataset is learnable and any failure is ours; if
 it scores badly, the data is the problem and no amount of reader training will
 fix it. That inversion is what none of the earlier debugging did.
 
+A caveat this file earned the hard way: the instrument-inversion trick above is
+good, but every check built on it interrogates the DATA -- and so did all four of
+my hypotheses. This gate PASSED in full (data learnable at 0.7970, context
+aligned, quality fine) and the very next GPU run still pinned at ln(5). The
+actual cause was in the model's own parameters, which nothing here looked at.
+Check 0 exists because of that, and it runs first precisely because a passing
+data gate is not evidence that training is possible.
+
 Checks, cheapest first:
 
+  0. TRAINABLE DTYPE (CPU, milliseconds). Are the loaded parameters even
+     high-precision enough for an optimizer step to survive rounding?
+     transformers 5.x follows the checkpoint's dtype and deberta-v3 ships fp16,
+     so a bare from_pretrained gives fp16 WEIGHTS; at lr=2e-5 an update is ~1.3
+     ULP near w=0.03 and exactly zero for w >= 0.1. Loss then pins at ln(5) with
+     perfectly healthy gradients, data, and input format.
   1. ALIGNMENT (CPU, seconds). Does each training row's stored context actually
      correspond to that row's query? Re-retrieves a sample and compares. A
      row-shift here would silently destroy training while leaving inference-time
@@ -35,6 +49,7 @@ Run: python scripts/hypothesis_gate.py [--skip-gpu]
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
 import numpy as np
@@ -169,11 +184,61 @@ def check_learnability() -> None:
         print("       the gold 200; expect a source-matched run to land well short of 0.86.")
 
 
+def check_trainable_dtype() -> bool:
+    """The cheapest check in the file, and the one that would have saved four runs.
+
+    Added after this gate PASSED (data learnable, context aligned, quality fine)
+    and the next GPU run still pinned at ln(5). The gate's three original checks
+    all interrogated the DATA, because all four of my hypotheses had blamed the
+    data. None of them looked at the model's own parameters.
+
+    transformers 5.x follows the checkpoint's stored dtype in from_pretrained,
+    and both deberta-v3-base and -large ship fp16, so the bare call returns fp16
+    PARAMETERS -- half-precision weights updated in place, not mixed precision.
+    Measured on our recipe: one AdamW step at lr=2e-5 moved a weight by
+    1.072e-01 in fp16 (ULP-snapped) versus a correct 2.001e-05 in fp32, and any
+    weight of magnitude >= 0.1 moved by exactly zero.
+
+    Milliseconds, no model download beyond config, no GPU.
+    """
+    print("\n[0] TRAINABLE DTYPE: can the optimizer actually move these weights?")
+    import torch
+    from transformers import AutoModelForMultipleChoice
+
+    ok = True
+    for name in ("microsoft/deberta-v3-base", "microsoft/deberta-v3-large"):
+        try:
+            m = AutoModelForMultipleChoice.from_pretrained(name)
+        except Exception as e:  # offline / no cache -- do not fail the gate on this
+            print(f"    {name}: could not load ({type(e).__name__}) -- skipped")
+            continue
+        dtypes = {p.dtype for p in m.parameters()}
+        del m
+        low = {d for d in dtypes if torch.finfo(d).bits < 32}
+        if low:
+            ok = False
+            lr, w = 2e-5, 0.03
+            d = next(iter(low))
+            ulp = 2.0 ** math.floor(math.log2(w)) * torch.finfo(d).eps
+            print(f"    {name}: DEFAULT LOAD GIVES {sorted(str(x) for x in low)}"
+                  f" -> lr={lr:.0e} is {lr / ulp:.1f} ULP at w={w}  ** UNTRAINABLE **")
+        else:
+            print(f"    {name}: default load is {sorted(str(x) for x in dtypes)} -- fine")
+    if not ok:
+        print("    => every training entry point MUST pass dtype=torch.float32 explicitly.")
+        print("       Use llmsci.reader.mc.load_mc_model_for_training / assert_trainable_dtype.")
+        print("       Symptom if you don't: train_loss pinned at ln(5) with healthy grads.")
+    return ok
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-gpu", action="store_true")
     args = ap.parse_args()
     print(f"random baseline = {BASELINE:.4f}")
+    # Cheapest first, and deliberately BEFORE the data checks: three of this
+    # gate's checks can pass in full while training is still impossible.
+    check_trainable_dtype()
     index, texts = load_index()
     print(f"index loaded: {len(texts)} chunks")
     check_alignment(index, texts)

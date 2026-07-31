@@ -1,5 +1,24 @@
 # Ablation table (Day 1–3, in progress)
 
+> ### Superseding correction (2026-07-31) — every own-model row below is invalid
+>
+> All own-model rows in this file were trained with **fp16 parameters**.
+> `transformers` 5.x makes `from_pretrained` follow the checkpoint's stored
+> dtype, and `deberta-v3-base`/`-large` both ship fp16, so every training run in
+> this project — from the first — updated half-precision weights in place. At
+> lr=2e-5 an AdamW update is ~1.3 ULP for a weight near 0.03 and **exactly zero
+> for any weight ≥ 0.1**, which includes DeBERTa's LayerNorm weights. Controlled
+> test, 16 rows / 60 steps / one variable: fp16 parks at loss 1.5687 (= ln 5),
+> fp32 reaches 0.1013.
+>
+> So these numbers measure **a frozen encoder with a trainable head**, not the
+> recipes their labels claim. They are kept, unedited, because the sequence of
+> wrong diagnoses is the artifact. Read them as a floor, never as a result.
+> Retrieval rows and public-checkpoint rows are unaffected — fp16 *inference* is
+> fine, which is why the leaderboard score (0.761131) stands.
+> Full story: `DEVLOG.md`, "the fifth hypothesis".
+
+
 > **⚠ READ THIS FIRST — 2026-07-30, late Day 3.** Two corrections, in the
 > order they happened, because the second retracts the first.
 >
