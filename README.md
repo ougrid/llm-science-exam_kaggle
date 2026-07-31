@@ -95,11 +95,12 @@ leaderboard score** plus a measured delta, instead of on a 200-row local estimat
 Both the revert trigger (below 0.761) and the escalate trigger (above 0.785) were
 written into `experiments/lb_log.csv` before submitting; neither fired.
 
-That miss is logged as a miss in `experiments/lb_log.csv`. The 200-row holdout
-said 0.86; the ~4,000-row hidden test said 0.76. The holdout's own CI is ±0.04,
-so **the gap is bigger than its sampling noise explains** — either the official
-200 is an easier sample or its distribution differs from the hidden set. I can't
-separate those with one submission, and I'm not going to pretend otherwise.
+On the 0.086 miss in row two: the 200-row holdout said 0.86, the ~4,000-row hidden
+test said 0.76, and that gap exceeds the holdout's own ±0.04 CI — so it is **not**
+explainable by sampling noise alone. Either the official 200 is an easier sample or
+its distribution differs from the hidden set; one submission cannot separate those.
+What it did establish is that local gold-200 figures are the wrong anchor for a
+leaderboard prediction, which is exactly the correction that made row three land.
 
 Row 1 is worth dwelling on: a **zero-parameter heuristic that always picks the
 longest option scores 0.4780**, beating several trained configurations. This
@@ -116,12 +117,19 @@ measurement in `experiments/log.csv` rather than to a source notebook:
 `dtype=torch.float32` + fp16 autocast, **lr=1e-4**, freeze embeddings + 75% of
 layers, effective batch 16, maxlen 384.
 
-| What | MAP@3 (T1) | Notes |
+| What | MAP@3 (full 1,500-row T1) | Notes |
 |---|---|---|
 | random baseline | 0.3667 | analytic |
-| `deberta-v3-base`, measured recipe, 4,586 rows | **~0.669** | *in progress — full-1,500 rescore pending* |
-| `deberta-v3-large`, **same recipe** | **0.3639** [0.3217, 0.4072] | **does not train** — 282 steps at full LR, never leaves ln(5) |
-| known-good public reader (ceiling) | 0.7970 [0.7687, 0.8247] | same eval set, same retrieval |
+| **`deberta-v3-base`, measured recipe, 4,586 rows** | **0.6906** [0.6714, 0.7090] | best checkpoint (step 1200 of 2288), rescored on all 1,500 rows |
+| `deberta-v3-large`, **same recipe** | 0.3639 [0.3217, 0.4072] | **does not train** — 282 steps at full LR, never leaves ln(5) |
+| known-good public reader (ceiling) | 0.7793 [0.7628, 0.7958] | same eval set, same retrieval |
+
+Both numbers above are on the **same 1,500 rows**, which matters: the 0.7970 ceiling
+this README quoted for most of the project came from a 500-row sample and was
+inflated by 0.0177. Selection subsets on this eval set drift 0.018–0.032 in *either*
+direction — my reader measured 0.6693 on a 500-row sample versus 0.6906 on all
+1,500 — so any figure derived by subtracting across different samples compounds two
+errors instead of cancelling them.
 
 **The 435M model does not train under this compute budget and the 184M one
 does.** That is measured, not assumed: identical pool, identical recipe, identical
