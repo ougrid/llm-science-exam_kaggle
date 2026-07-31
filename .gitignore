@@ -41,3 +41,4 @@ notebooks/kaggle/*-data/*
 *.npy
 *.whl
 data/checkpoints/
+data/bm25_index_general_oddhalf/

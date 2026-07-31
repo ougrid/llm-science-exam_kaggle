@@ -47,6 +47,7 @@ TIME_BUDGET_S = 7.5 * 3600  # competition limit is 9 h; leave headroom
 OUT = Path("/kaggle/working")
 OPTIONS = ["A", "B", "C", "D", "E"]
 TOP_K = 5
+RRF_K = 60  # reciprocal-rank-fusion constant; matches src/llmsci/retrieve/fuse.py
 CONTEXT_CHAR_CLIP = 1750  # matches the reader's own part-2 inference recipe
 BATCH_SIZE = 2  # v2 OOM'd on a T4 at 8; 200-4,000 rows is fast either way
 
@@ -102,26 +103,65 @@ def main() -> None:
     # analytic random baseline (0.3667) rather than erroring out.
     write_submission(test, ["A B C"] * len(test))
 
-    index_dir = find_dir("params.index.json")
-    print(f"BM25 index dir: {index_dir}")
-    chunks = pd.read_parquet(index_dir / "chunk_texts.parquet", columns=["text"])
-    chunk_texts = chunks["text"].tolist()
-    del chunks
-    retriever = bm25s.BM25.load(str(index_dir))
-    print(f"loaded index over {len(chunk_texts)} chunks [{time.time() - START:.0f}s]")
+    # DUAL-INDEX RETRIEVAL WITH RRF FUSION.
+    # The general corpus is 3,020,431 chunks, but a single BM25 index over all of
+    # it will not build in 15 GB -- MemoryError while tokenising at both 2.4M and
+    # 2.0M chunks, measured. The old build's SHARD_STEP=2 workaround meant this
+    # submission searched HALF the corpus. Fix: index the two halves separately
+    # (shards [0::2] and [1::2]) and fuse their results per query.
+    # Measured on all 1,500 T1 rows: answer-support recall@5 goes 0.6207 -> 0.6400,
+    # a paired +0.0193 [+0.0053,+0.0327] -- RESOLVED. On the clean gold 200 the
+    # reader's MAP@3 goes 0.8600 -> 0.8733, +0.0133 [-0.0108,+0.0375], which 200
+    # rows cannot resolve; the upstream recall gain is what justifies this.
+    # Either half alone scores 0.6207 vs 0.6220 -- identical -- so Wikipedia is
+    # redundant and the win comes from fusing two views, not from new topics.
+    index_dirs = sorted({Path(m).parent for m in
+                         glob("/kaggle/input/**/params.index.json", recursive=True)})
+    if not index_dirs:
+        raise FileNotFoundError("no BM25 index found under /kaggle/input")
+    print(f"BM25 indexes ({len(index_dirs)}): {[d.name for d in index_dirs]}")
 
     # Identical to src/llmsci/retrieve/sparse.py build_query(), so the submission
-    # retrieves exactly what the local 0.8592 gold-200 measurement retrieved.
+    # retrieves exactly what the local gold-200 measurements retrieved.
     queries = [
         f"{r['prompt']} " + " ".join(str(r[c]) for c in OPTIONS) for _, r in test.iterrows()
     ]
     tokenized = bm25s.tokenize(queries, stopwords="en", show_progress=False)
-    idx, _scores = retriever.retrieve(tokenized, k=TOP_K, show_progress=False)
-    contexts = [" ".join(chunk_texts[j] for j in row) for row in idx]
+
+    # One index resident at a time. Holding both was the original OOM, and Kaggle's
+    # RAM is generous but not unlimited -- this costs a little wall clock and
+    # removes the failure mode entirely.
+    per_index_hits: list[list[list[str]]] = []
+    for d in index_dirs:
+        chunks = pd.read_parquet(d / "chunk_texts.parquet", columns=["text"])
+        chunk_texts = chunks["text"].tolist()
+        del chunks
+        retriever = bm25s.BM25.load(str(d))
+        idx, _scores = retriever.retrieve(tokenized, k=TOP_K, show_progress=False)
+        per_index_hits.append([[chunk_texts[j] for j in row] for row in idx])
+        print(f"  {d.name}: {len(chunk_texts)} chunks, retrieved top-{TOP_K} "
+              f"[{time.time() - START:.0f}s]", flush=True)
+        del chunk_texts, retriever, idx
+        gc.collect()
+
+    # RRF over TEXTS, not chunk ids: the indexes cover disjoint shards so their id
+    # spaces are unrelated. Rank-based fusion also sidesteps the fact that BM25
+    # scores are not comparable across corpora (IDF depends on each index's own
+    # document frequencies) -- which is why RRF beat raw score-pooling locally,
+    # +0.0193 vs +0.0167.
+    contexts = []
+    for row_i in range(len(test)):
+        scored: dict[str, float] = {}
+        for hits in per_index_hits:
+            for rank, txt in enumerate(hits[row_i]):
+                scored[txt] = scored.get(txt, 0.0) + 1.0 / (RRF_K + rank + 1)
+        top = sorted(scored.items(), key=lambda kv: -kv[1])[:TOP_K]
+        contexts.append(" ".join(txt for txt, _ in top))
     test = test.copy()
     test["context"] = contexts
-    print(f"retrieved top-{TOP_K} for {len(test)} rows [{time.time() - START:.0f}s]")
-    del chunk_texts, retriever
+    print(f"fused top-{TOP_K} across {len(index_dirs)} index(es) for {len(test)} rows "
+          f"[{time.time() - START:.0f}s]")
+    del per_index_hits, tokenized
     gc.collect()
 
     model_dir = find_dir("config.json")

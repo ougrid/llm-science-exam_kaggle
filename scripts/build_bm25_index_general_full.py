@@ -73,17 +73,26 @@ def main() -> None:
     ap.add_argument("--min-available-gb", type=float, default=2.0,
                     help="abort if system available memory drops below this")
     ap.add_argument("--max-shards", type=int, default=None)
+    # The shipped index took shards [::2] (0,2,4,...). Its COMPLEMENT (1,3,5,...) is
+    # 1.42M chunks -- smaller than the 1.6M that builds fine -- so two half-indexes
+    # fused at query time reach full coverage at half the peak memory, instead of one
+    # 3.02M index that does not fit this box at all. Corpus diversity through
+    # multiple indexes rather than one bigger one is also what 1st place did.
+    ap.add_argument("--shard-step", type=int, default=1)
+    ap.add_argument("--shard-offset", type=int, default=0)
+    ap.add_argument("--out-dir", type=Path, default=OUT_DIR)
     args = ap.parse_args()
 
     start = time.time()
-    shards = sorted(CHUNK_DIR.glob("shard-*.parquet"))
+    shards = sorted(CHUNK_DIR.glob("shard-*.parquet"))[args.shard_offset :: args.shard_step]
     if args.max_shards:
         shards = shards[: args.max_shards]
     print(f"full build over {len(shards)} shards (the shipped index used every 2nd)")
     print(f"abort floor: {args.min_available_gb:.1f} GB available | "
           f"start: RSS {rss_gb():.2f} GB, available {available_gb():.2f} GB", flush=True)
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir = args.out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
     texts: list[str] = []
     writer = None
     try:
@@ -92,7 +101,7 @@ def main() -> None:
             texts.extend(df["text"].tolist())
             table = pa.Table.from_pandas(df, preserve_index=False)
             if writer is None:
-                writer = pq.ParquetWriter(OUT_DIR / "chunk_texts.parquet", table.schema)
+                writer = pq.ParquetWriter(out_dir / "chunk_texts.parquet", table.schema)
             writer.write_table(table)
             del df, table
             gc.collect()
@@ -111,11 +120,26 @@ def main() -> None:
 
     print(f"\nloaded {len(texts):,} chunks, RSS {rss_gb():.2f} GB, "
           f"available {available_gb():.2f} GB -- tokenising (the real memory peak)", flush=True)
-    index = BM25Index(texts)
+    # The previous attempt died HERE, not during loading, and took the terminal with
+    # it: the OOM killer picks whatever victim it likes. The per-shard floor above
+    # never fired because tokenisation is a single call with no checkpoint inside it.
+    # Two mitigations. First, run this script under `ulimit -v` so an over-budget
+    # allocation raises MemoryError in THIS process instead of the kernel choosing a
+    # casualty. Second, catch it and say what to retry with, so a failure is a
+    # measurement of the ceiling rather than a lost session.
+    try:
+        index = BM25Index(texts)
+    except MemoryError:
+        n = len(texts)
+        print(f"  ** MemoryError tokenising {n:,} chunks. This is the ceiling for this box.")
+        print(f"     Retry with --max-shards {max(1, len(shards) - 2)} "
+              f"(~{n * (len(shards) - 2) // len(shards):,} chunks).")
+        print("     The shipped 1,600,063-chunk index is untouched and still usable.")
+        return
     print(f"indexed | RSS {rss_gb():.2f} GB | available {available_gb():.2f} GB "
           f"[{time.time()-start:.0f}s]", flush=True)
-    index.save(OUT_DIR)
-    print(f"saved -> {OUT_DIR}/ [{time.time()-start:.0f}s]")
+    index.save(out_dir)
+    print(f"saved -> {out_dir}/ [{time.time()-start:.0f}s]")
     print(f"\npeak RSS {rss_gb():.2f} GB (the old pd.concat build hit 12.45 GB on HALF this)")
     print("next: scripts/compare_corpus_recall_paired.py to check the recall gain is real")
 

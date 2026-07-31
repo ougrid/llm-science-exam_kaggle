@@ -9,6 +9,7 @@
   "enable_internet": false,
   "dataset_sources": [
     "ougridd/llmsci-bm25-index-general",
+    "ougridd/llmsci-bm25-index-general-oddhalf",
     "ougridd/llmsci-offline-wheels",
     "mgoksu/llm-science-run-context-2"
   ],
