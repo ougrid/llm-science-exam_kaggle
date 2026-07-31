@@ -125,6 +125,15 @@ rather than conceding it: the original claim was *retrieval quality beats
 parameter count*, and this is a harder version — a 184M reader that trains beats
 a 435M one that doesn't.
 
+**The boundary on that claim, stated so it isn't over-read.** What is measured is
+that `deberta-v3-large` does not train *at three learning rates (2e-5, 5e-5,
+1e-4), with 75% of layers frozen, at effective batch 16, on a 4,586-row pool*.
+That is a bounded negative result about a configuration, **not** evidence the
+architecture is untrainable — cdeotte trained the same checkpoint successfully on
+~60k rows, and the most likely difference is data scale, not the model. The
+correct follow-up is to retry large on the 39,249-row pool before drawing any
+architectural conclusion, and that is queued rather than claimed.
+
 ### Not mine (reference anchor — separated deliberately)
 
 | # | What | MAP@3 | 95% CI | Tier |
