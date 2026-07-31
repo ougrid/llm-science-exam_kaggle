@@ -56,7 +56,7 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import AutoModelForMultipleChoice, AutoTokenizer, get_linear_schedule_with_warmup
 
-from llmsci.gpu_guard import cap_memory_fraction
+from llmsci.gpu_guard import cap_memory_fraction, probe_training_speed
 from llmsci.metrics import average_precision_scores, bootstrap_ci, random_baseline_map_at_k
 from llmsci.reader.mc import (
     DataCollatorForMultipleChoice,
@@ -129,6 +129,25 @@ def main() -> None:
         cap_memory_fraction(0.975)
     torch.manual_seed(SEED)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # CLAUDE.md requires BOTH gpu_guard calls before loading the real model. The
+    # first big-pool attempt called only cap_memory_fraction() and then died
+    # silently at step 250 after degrading 2.17 -> 2.69 s/step, which is exactly
+    # the class of failure the speed probe exists to catch up front.
+    # Threshold from measurement, not guesswork: the 4,586-row run held
+    # 2.16-2.31 s/step for 2,288 steps at this batch shape, so 4,000 ms is ~1.7x
+    # the observed steady state -- loose enough not to false-trip on a cold cache,
+    # tight enough to catch a PCIe-backed spill (which costs 15-25x, not 70%).
+    if device.type == "cuda":
+        probe_training_speed(
+            MODEL_NAME, batch_size=MICRO_BATCH, num_choices=5, seq_len=MAX_LENGTH,
+            device=device, max_ms_per_step=4000.0,
+            # These three MUST mirror the real run below. A probe that optimises
+            # all 184.4M params instead of the 22.2M trainable ones needs ~8x the
+            # optimizer state and OOMs where production would not -- which is
+            # exactly what happened on the first attempt at this run.
+            n_frozen_layers=N_FROZEN, freeze_embeddings=FREEZE_EMBEDDINGS,
+            autocast_dtype=torch.float16,
+        )
     print(f"device {device} | {MODEL_NAME} | lr={args.lr:.0e} | freeze {N_FROZEN}/12 "
           f"| ln(5)={RANDOM_LOSS:.4f} | baseline={BASELINE:.4f}")
 
@@ -172,6 +191,7 @@ def main() -> None:
     best = (-1.0, 0.0, 0.0)
     best_step = -1
     step, t0, stopped, window = 0, time.time(), False, []
+    first_rate = 1e9  # set at step 100; guards the watchdog before then
     model.train()
 
     for epoch in range(args.epochs):
@@ -206,6 +226,17 @@ def main() -> None:
             if step % 25 == 0:
                 m = sum(window) / len(window)
                 el = time.time() - t0
+                # The probe validates the start of a run; this catches degradation
+                # DURING it. The first big-pool attempt slid 2.17 -> 2.69 s/step
+                # before dying, and nothing would have flagged that.
+                if step >= 100 and el / step > 2.0 * first_rate:
+                    print(f"  ** STEP TIME DEGRADED: {el/step:.2f}s/step vs "
+                          f"{first_rate:.2f}s/step early -- suspect a memory spill; "
+                          f"stopping so the checkpoint is not lost", flush=True)
+                    stopped = True
+                    break
+                if step == 100:
+                    first_rate = el / step
                 print(f"  ep{epoch+1} step {step}/{total_steps} train_loss {m:.4f} "
                       f"(ln5 {RANDOM_LOSS:.4f}) lr {sched.get_last_lr()[0]:.2e} "
                       f"[{el:.0f}s, {el/step:.2f}s/step, eta {(total_steps-step)*el/step/60:.0f}m]",

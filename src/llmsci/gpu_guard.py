@@ -86,6 +86,9 @@ def probe_training_speed(
     eps: float = 1e-6,
     n_warmup: int = 2,
     n_measure: int = 5,
+    n_frozen_layers: int = 0,
+    freeze_embeddings: bool = False,
+    autocast_dtype: torch.dtype | None = None,
 ) -> float:
     """Benchmark a throwaway model/optimizer at the production batch shape.
 
@@ -94,10 +97,27 @@ def probe_training_speed(
     state -- it exists purely to measure hardware throughput before
     committing to a run that might silently take 100x longer than expected.
     Frees its GPU memory before returning.
+
+    `n_frozen_layers` / `freeze_embeddings` / `autocast_dtype` must MATCH the
+    production run. Without them the probe is not merely inaccurate, it is
+    HEAVIER than the run it is supposed to protect, and can OOM where production
+    would have been fine: AdamW over all of deberta-v3-base's 184.4M parameters
+    needs ~1.5 GB of exp_avg/exp_avg_sq against ~0.18 GB for the 22.2M left
+    trainable by a 9/12 freeze. That happened -- a probe added to guard a run
+    became the thing that killed it. A guard that does not reproduce the
+    configuration it guards is worse than no guard.
     """
     probe_model = AutoModelForMultipleChoice.from_pretrained(model_name, dtype=torch.float32).to(device)
     probe_model.train()
-    probe_optimizer = torch.optim.AdamW(probe_model.parameters(), lr=lr, eps=eps)
+    if freeze_embeddings:
+        for _p in probe_model.deberta.embeddings.parameters():
+            _p.requires_grad = False
+    for _layer in probe_model.deberta.encoder.layer[:n_frozen_layers]:
+        for _p in _layer.parameters():
+            _p.requires_grad = False
+    probe_optimizer = torch.optim.AdamW(
+        [_p for _p in probe_model.parameters() if _p.requires_grad], lr=lr, eps=eps
+    )
 
     input_ids = torch.randint(0, 1000, (batch_size, num_choices, seq_len), device=device)
     attention_mask = torch.ones_like(input_ids)
@@ -105,12 +125,16 @@ def probe_training_speed(
     labels = torch.randint(0, num_choices, (batch_size,), device=device)
 
     def step():
-        out = probe_model(
-            input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, labels=labels
-        )
+        with torch.autocast(
+            device.type, dtype=autocast_dtype or torch.float32, enabled=autocast_dtype is not None
+        ):
+            out = probe_model(
+                input_ids=input_ids, attention_mask=attention_mask,
+                token_type_ids=token_type_ids, labels=labels,
+            )
         out.loss.backward()
         probe_optimizer.step()
-        probe_optimizer.zero_grad()
+        probe_optimizer.zero_grad(set_to_none=True)
 
     try:
         return assert_step_speed(
