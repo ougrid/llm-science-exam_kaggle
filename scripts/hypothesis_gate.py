@@ -225,9 +225,45 @@ def check_trainable_dtype() -> bool:
         else:
             print(f"    {name}: default load is {sorted(str(x) for x in dtypes)} -- fine")
     if not ok:
-        print("    => every training entry point MUST pass dtype=torch.float32 explicitly.")
-        print("       Use llmsci.reader.mc.load_mc_model_for_training / assert_trainable_dtype.")
-        print("       Symptom if you don't: train_loss pinned at ln(5) with healthy grads.")
+        print("    => so every training entry point MUST pass dtype explicitly. Auditing:")
+
+    # The library default being fp16 is permanent and will be reported every run,
+    # which on its own decays into noise. What is actionable is whether OUR
+    # training scripts override it -- so audit them by source. A training script
+    # that constructs an optimizer must also pin a dtype.
+    unguarded = []
+    checked = 0
+    for path in sorted(Path("scripts").glob("*.py")) + sorted(
+        Path("notebooks/kaggle").glob("*/script.py")
+    ):
+        try:
+            src = path.read_text()
+        except OSError:
+            continue
+        if "AutoModelForMultipleChoice.from_pretrained" not in src:
+            continue
+        trains = "optim.AdamW" in src or "get_linear_schedule_with_warmup" in src
+        if not trains:
+            continue  # inference-only path: fp16 is correct there, and cheaper
+        checked += 1
+        guarded = (
+            "dtype=torch.float32" in src
+            or "load_mc_model_for_training" in src
+            or "dtype=dtype" in src
+        )
+        if not guarded:
+            unguarded.append(str(path))
+
+    if unguarded:
+        ok = False
+        print(f"    {len(unguarded)} of {checked} TRAINING scripts do not pin a dtype:")
+        for u in unguarded:
+            print(f"       ** {u}")
+        print("       Fix with dtype=torch.float32 (or load_mc_model_for_training) before")
+        print("       launching. Symptom otherwise: train_loss pinned at ln(5) with")
+        print("       perfectly healthy gradients, optimizer, labels, and input format.")
+    else:
+        print(f"    all {checked} training scripts pin an explicit dtype -- OK")
     return ok
 
 
