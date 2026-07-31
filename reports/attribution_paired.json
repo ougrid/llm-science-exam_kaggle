@@ -1,0 +1,23 @@
+{
+  "eval_rows": 1500,
+  "baseline": 0.36666666666666664,
+  "public_reader": [
+    0.7793333333333333,
+    0.7627777777777777,
+    0.7957777777777777
+  ],
+  "our_reader": [
+    0.6905555555555555,
+    0.6714444444444444,
+    0.7090027777777776
+  ],
+  "reader_attributable_loss_paired": [
+    0.08877777777777779,
+    0.07066666666666667,
+    0.10633333333333334
+  ],
+  "disagreement_rate": 0.40066666666666667,
+  "resolved": true,
+  "superseded_claim": 0.413,
+  "our_checkpoint": "data/checkpoints/base-fixed-lr1e-4"
+}

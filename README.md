@@ -158,19 +158,35 @@ against. The same weights score 0.9170 on my T1 dev set — a number that is
 retrieval loss. There was no oracle available — until it became clear that the
 known-good public reader *is* one. Hold retrieval fixed, vary only the reader:
 
-| Reader, on T1 with **my** retrieved context | MAP@3 | 95% CI |
+| Reader, on the **same 1,500 T1 rows** with **my** retrieved context | MAP@3 | 95% CI |
 |---|---|---|
-| known-good public checkpoint | **0.7970** | [0.7687, 0.8247] |
-| my trained reader *(both faults present — see below)* | 0.3840 | [0.3649, 0.4036] |
-| gap | 0.4130 | — |
+| known-good public checkpoint | 0.7793 | [0.7628, 0.7958] |
+| **mine** (`deberta-v3-base`, measured recipe) | **0.6906** | [0.6714, 0.7090] |
+| **reader-attributable loss** (paired bootstrap) | **+0.0888** | **[+0.0707, +0.1063]** |
 
-**That 0.4130 was labelled "reader-attributable loss" and it was mislabelled.** It
-quantifies two bugs, not a training gap: my reader was training fp16 *parameters*
-at an inherited learning rate that measurement later showed cannot learn at all.
-It is retained rather than deleted because the mislabelling is the instructive
-part — a real, correctly-computed number can still answer the wrong question, and
-"reader-attributable" smuggled in a causal claim the measurement never supported.
-The genuine split is being re-measured with a reader that actually trains.
+So ~9 MAP@3 points sit in reader training, and everything above 0.7793 is what
+better retrieval could add. The CI excludes 0, so it is resolved.
+
+**This supersedes a figure of 0.4130 that this README carried for most of the
+project, and the correction is the most instructive thing here.** That number was
+wrong twice over:
+
+1. **It quantified bugs, not a training gap.** The reader it measured was training
+   fp16 *parameters* at an inherited learning rate that measurement later showed
+   cannot learn at all. **79% of the 0.4130 was those two bugs.**
+2. **It subtracted across different row samples** — a 500-row seed-0 sample for the
+   ceiling against other rows for my reader. Measured drift from sample choice on
+   this very eval set: my reader 0.6693 (500 rows, seed 42) vs 0.6907 (all 1,500);
+   the ceiling 0.7970 (500 rows, seed 0) vs 0.7793 (all 1,500). The two drifts ran
+   in **opposite** directions, so the cross-sample subtraction compounded both
+   errors instead of cancelling them.
+
+`PLAN.md`'s own noise arithmetic predicts exactly this: ±0.032 on 500 rows, ±0.018
+on 1,500. I wrote that section before building anything and then made a ±0.03-sized
+error anyway. The fix is method, not care — `scripts/attribution_paired_full_t1.py`
+scores both readers on identical rows and bootstraps the **per-row difference**,
+which is why its CI is ±0.018 rather than the much looser interval a subtraction of
+two independent means would give.
 
 The same reader scores 0.8600 on the official 200 with the same retrieval, so
 T1 is *modestly* harder than the gold set — not a broken eval. I had floated
