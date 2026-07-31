@@ -110,13 +110,25 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--epochs", type=int, default=EPOCHS)
     ap.add_argument("--lr", type=float, default=LR)
+    # The source-2-only restriction (4,586 of 39,249 rows) came from hypothesis 4,
+    # the train/eval generator mismatch -- which cell B of
+    # diagnose_train_data_and_format.py falsified: a known-good reader scores
+    # 0.8037 on the TRAIN file vs 0.7970 on the eval file, so the two are equally
+    # readable and generator shift was never a mechanism. With that gone there is
+    # no measured reason to discard 88% of the pool, so the file is now an argument.
+    ap.add_argument("--train-file", default=str(TRAIN_SRC2))
+    ap.add_argument("--out-suffix", default="", help="appended to the checkpoint dir name")
+    ap.add_argument("--time-budget-min", type=float, default=TIME_BUDGET_S / 60)
     args = ap.parse_args()
+    train_path = Path(args.train_file)
+    out_dir = Path(str(OUT) + args.out_suffix)
+    time_budget = args.time_budget_min * 60
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == "cuda":
         cap_memory_fraction(0.975)
     torch.manual_seed(SEED)
-    OUT.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     print(f"device {device} | {MODEL_NAME} | lr={args.lr:.0e} | freeze {N_FROZEN}/12 "
           f"| ln(5)={RANDOM_LOSS:.4f} | baseline={BASELINE:.4f}")
 
@@ -134,12 +146,12 @@ def main() -> None:
     total = sum(p.numel() for p in model.parameters())
     print(f"trainable {trainable/1e6:.1f}M of {total/1e6:.1f}M ({100*trainable/total:.1f}%)")
 
-    train_df = pd.read_parquet(TRAIN_SRC2)
+    train_df = pd.read_parquet(train_path)
     train_df["context"] = train_df["context"].str.slice(0, MAX_CONTEXT_CHARS)
     t1 = pd.read_parquet(T1_CTX)
     t1["context"] = t1["context"].str.slice(0, MAX_CONTEXT_CHARS)
     t1_sel = t1.sample(n=min(EVAL_SUBSET, len(t1)), random_state=SEED).reset_index(drop=True)
-    print(f"train {len(train_df)} rows | T1 full {len(t1)} | T1 selection {len(t1_sel)}")
+    print(f"train {len(train_df)} rows from {train_path.name} | T1 full {len(t1)} | T1 selection {len(t1_sel)}")
 
     collator = DataCollatorForMultipleChoice(tok)
     loader = DataLoader(
@@ -155,7 +167,7 @@ def main() -> None:
     sched = get_linear_schedule_with_warmup(opt, int(0.06 * total_steps), total_steps)
     scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
     print(f"optim steps/epoch {steps_per_epoch}, total {total_steps}, "
-          f"budget {TIME_BUDGET_S/60:.0f} min", flush=True)
+          f"budget {time_budget/60:.0f} min", flush=True)
 
     best = (-1.0, 0.0, 0.0)
     best_step = -1
@@ -207,15 +219,15 @@ def main() -> None:
                       f"base {BASELINE:.4f} -- {sig}", flush=True)
                 if mean > best[0]:
                     best, best_step = (mean, lo, hi), step
-                    model.save_pretrained(OUT)
-                    tok.save_pretrained(OUT)
-                    (OUT / "progress.json").write_text(json.dumps({
+                    model.save_pretrained(out_dir)
+                    tok.save_pretrained(out_dir)
+                    (out_dir / "progress.json").write_text(json.dumps({
                         "best_step": best_step, "best_map3_subset": best,
                         "lr": args.lr, "n_frozen": N_FROZEN, "elapsed_s": time.time() - t0,
                     }, indent=2))
-                    print(f"     saved checkpoint (best so far) -> {OUT}", flush=True)
+                    print(f"     saved checkpoint (best so far) -> {out_dir}", flush=True)
 
-            if time.time() - t0 > TIME_BUDGET_S:
+            if time.time() - t0 > time_budget:
                 print(f"TIME BUDGET reached at step {step} -- stopping cleanly", flush=True)
                 stopped = True
                 break
@@ -229,7 +241,7 @@ def main() -> None:
         gc.collect()
         if device.type == "cuda":
             torch.cuda.empty_cache()
-        model = AutoModelForMultipleChoice.from_pretrained(OUT, dtype=torch.float32).to(device)
+        model = AutoModelForMultipleChoice.from_pretrained(out_dir, dtype=torch.float32).to(device)
         mean, lo, hi = evaluate(model, tok, t1, collator, device)
         print(f"BEST(step {best_step}) on FULL T1 ({len(t1)}): MAP@3 {mean:.4f} [{lo:.4f},{hi:.4f}]")
         print(f"  its {EVAL_SUBSET}-row selection score was {best[0]:.4f} "
@@ -241,15 +253,16 @@ def main() -> None:
                    "above baseline but below the old invalid 0.6086" if lo > BASELINE else
                    "NOT resolved above baseline")
         print(f"  => {verdict}")
-        (OUT / "result_summary.json").write_text(json.dumps({
-            "model": MODEL_NAME, "lr": args.lr, "n_frozen": N_FROZEN,
+        (out_dir / "result_summary.json").write_text(json.dumps({
+            "model": MODEL_NAME, "train_file": train_path.name, "train_rows": len(train_df),
+            "lr": args.lr, "n_frozen": N_FROZEN,
             "max_length": MAX_LENGTH, "effective_batch": MICRO_BATCH * GRAD_ACCUM,
             "steps_done": step, "steps_planned": total_steps, "train_minutes": train_s / 60,
             "best_step": best_step, "map3_full_t1": [mean, lo, hi],
             "map3_selection_subset": list(best), "baseline": BASELINE,
             "ceiling_known_good_reader": 0.7970, "verdict": verdict,
         }, indent=2))
-        print(f"wrote {OUT/'result_summary.json'}")
+        print(f"wrote {out_dir/'result_summary.json'}")
     else:
         print("no eval reached -- nothing saved")
 
