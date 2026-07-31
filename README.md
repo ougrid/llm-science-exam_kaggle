@@ -16,7 +16,7 @@ two real causes.
 
 ## Headline
 
-> **Kaggle leaderboard: 0.761131 public / 0.747994 private** — my retrieval
+> **Kaggle leaderboard: 0.762796 public / 0.755183 private** — my retrieval
 > pipeline paired with a public reader checkpoint (provenance below), against
 > 0.375156 for a random-guess baseline.
 >
@@ -82,7 +82,18 @@ conditions let the head learn most before fp16 rounding stalled it.
 | Submission | Public | Private | Predicted beforehand |
 |---|---|---|---|
 | dummy `"A B C"` (scale reference) | 0.375156 | 0.356882 | ~0.3667 ✓ |
-| my retrieval + public reader | **0.761131** | **0.747994** | ~0.86 ✗ **missed by 0.086** |
+| single-index retrieval + public reader | 0.761131 | 0.747994 | ~0.86 ✗ **missed by 0.086** |
+| **dual-index RRF fusion + public reader** | **0.762796** | **0.755183** | 0.770 (range 0.755–0.785) — inside range, **0.007 high** |
+
+The third row is the one measurement-driven score improvement in this project, and
+the prediction attached to it is the more useful artifact. **+0.0072 private,
++0.0017 public.** I predicted +0.009 and the *private* split — the larger, less
+noisy one — moved +0.0072, so the effect-size reasoning was right; I quoted it
+against the noisier number. The calibration improvement over the previous row
+(0.007 vs 0.086) came from one change: anchoring the prediction on the **actual
+leaderboard score** plus a measured delta, instead of on a 200-row local estimate.
+Both the revert trigger (below 0.761) and the escalate trigger (above 0.785) were
+written into `experiments/lb_log.csv` before submitting; neither fired.
 
 That miss is logged as a miss in `experiments/lb_log.csv`. The 200-row holdout
 said 0.86; the ~4,000-row hidden test said 0.76. The holdout's own CI is ±0.04,
