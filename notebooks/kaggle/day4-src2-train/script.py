@@ -1,40 +1,60 @@
-"""DAY 4: source-MATCHED training -- the actual diagnosis.
+"""DAY 4 (rerun): the FIRST run in this project whose optimizer can actually work.
 
-WHAT THE OVERNIGHT RUNS RULED OUT.
-Two 5-hour runs (ougridd/night-large, ougridd/night-base) reached ~2,000
-optimizer steps -- 3.3x the 600 steps of the previous attempt -- and moved
-nothing: 0.3840 [0.3649,0.4036] and 0.3746 [0.3558,0.3937] against a 0.3667
-baseline. So training VOLUME was not the gap, and the "starved optimization"
-story was wrong.
+WHY THE PREVIOUS FOUR TRAINING RUNS FAILED -- and it was not any of the four
+things I claimed. Every run pinned train_loss at ln(5)=1.6094 (measured:
+1.6118..1.6173 across 1,000 optimizer steps and 4 epochs of 4,586 rows with
+77.2M trainable parameters). The cause was one library default:
 
-WHAT IT ACTUALLY IS: a train/eval distribution mismatch I introduced myself.
-Source distributions, measured:
+  transformers 5.x makes from_pretrained follow the CHECKPOINT's stored dtype,
+  and both deberta-v3-base and -large ship fp16. So the bare call returned fp16
+  PARAMETERS -- not fp16 compute with fp32 master weights (that is mixed
+  precision), but genuinely half-precision weights that AdamW updated in place.
 
-    T1 dev (eval):     source 2 = 1,397/1,500 (93%),  source 1 = 103
-    39,249-row pool:   source 2 =   4,586      (11.7%), source 3 = 14,824 (38%)
+An AdamW step is ~lr in magnitude, so the only question is whether lr is
+REPRESENTABLE as a change to the weight. Measured, 20 steps at lr=2e-5 with a
+constant-sign gradient -- the easiest possible case:
 
-We trained on a pool that is 11.7% source-2 and evaluated on a set that is
-93% source-2. cdeotte's `all_12_with_context2.csv` merges 12 generators whose
-context and question styles differ, so this is a real covariate shift, not a
-cosmetic one.
+    w = 0.03  ->  fp16 moves 3.05e-04 vs fp32's 4.00e-04   (76% of intended)
+    w >= 0.1  ->  fp16 moves 0.00e+00                      (FROZEN, forever)
 
-Worse, this project had ALREADY found and fixed this once: row 5 of
-reports/ablation_table.md -- MAP@3 0.6086 [0.5880,0.6291], still the best
-own-model result in the project -- was trained on a source-MATCHED slice of
-exactly 4,586 rows, which is precisely source 2's count. When I scaled the
-pool 4,978 -> 39,249 rows for "more data", I traded the distribution match for
-volume and regressed the fix.
+fp16 ULP grows with magnitude, so the larger a weight is the smaller lr looks
+beside it. deberta's LayerNorm weights sit near 1.0, so most of the network was
+frozen solid; only the small head weights moved, in erratic ULP jumps. On this
+exact recipe, one step moved classifier.weight by 1.072e-01 in fp16 against a
+correct 2.001e-05 in fp32. Controlled test, 16 rows / 60 steps / one variable:
 
-THIS RUN: the same source-matched 4,586 rows, but with OUR general-corpus BM25
-context instead of cdeotte's (so train and eval retrieval match by
-construction, per CLAUDE.md), frozen-layer recipe, and enough epochs that the
-small pool is no longer the constraint -- 286 optimizer steps/epoch at
-effective batch 16, so 12 epochs is ~3,400 steps.
+    fp16: loss 1.53 -> 4.32 -> 1.5687   parked at ln(5)
+    fp32: loss 1.68 -> 0.47 -> 0.1013   learns
 
-Reference points to beat: our own best 0.3840 (does not clear baseline), and
-row 5's source-matched 0.6086 on cdeotte's context. The public-reader anchor on
-our context is 0.8600 on the clean gold 200, which is what says the retrieval
-is fine and the reader path is where the loss is.
+WHAT WAS RULED OUT FIRST, so this is a diagnosis and not a fifth guess.
+Using the known-good public reader as an INSTRUMENT to test our data
+(scripts/diagnose_train_data_and_format.py), three cells one variable apart:
+
+    A  eval file  + reference format (control)   0.7970 [0.7687, 0.8247]
+    B  TRAIN file + reference format             0.8037 [0.7743, 0.8320]
+    C  eval file  + THIS script's format         0.7947 [0.7657, 0.8240]
+
+All three overlap. So the training pool's labels are correct, its context
+supports its answers, and this script's input format costs essentially nothing.
+Cell B also kills the story the previous version of this file was built on --
+a train/eval generator mismatch -- because train and eval turn out to be equally
+readable by the same instrument. Gradients were always healthy too (frozen
+groups grad=None, classifier 3.83, pooler 4.26, layers 18-23 in 0.08-0.41).
+
+WHAT THIS RUN IS. The same source-matched 4,586 rows with our own general-corpus
+BM25 context (so train and eval retrieval match by construction, per CLAUDE.md)
+and the same frozen-layer recipe -- but with fp32 MASTER WEIGHTS and fp16
+autocast COMPUTE. Both halves are load-bearing: fp16 weights make the optimizer
+a no-op, and fp32 compute would roughly double activation memory and risk OOM at
+batch 2 x 384 on a 16 GB T4.
+
+WHAT TO READ IN THE LOG. train_loss must FALL BELOW 1.6094. If it sits there
+again, the fix did not take and nothing else in the log matters.
+
+REFERENCE POINTS. Random baseline 0.3667. Our previous best own-model 0.6086
+(row 6) and the 0.3840/0.3746 nulls are all products of the bug above and are
+floors, not targets. The honest ceiling is 0.7970 -- the known-good reader on
+this same eval set with this same retrieval.
 """
 
 from __future__ import annotations
@@ -66,14 +86,21 @@ MAX_CONTEXT_CHARS = 8_000
 BATCH_SIZE = 2  # batch 4 OOM'd on T4 in disentangled attention; 2 is measured-safe
 GRAD_ACCUM_STEPS = 8  # effective batch 16, matching cdeotte part 2
 EVAL_BATCH_SIZE = 8
-EPOCHS = 12  # 4,586 rows -> 286 optim steps/epoch; the pool is small, so epochs are cheap
+# Sized from the MEASURED rate of the previous run: 6.4 s per optimizer step
+# (80 sequences of 384 tokens through deberta-v3-large on a T4). 6 epochs =
+# 1,716 steps ~= 3.0 h, leaving room inside TIME_BUDGET_S for two full 1,500-row
+# evals at the end. The point is for the linear LR schedule to actually COMPLETE:
+# a run guillotined by the time budget at 34% LR never anneals, and the previous
+# 12-epoch plan could not finish.
+EPOCHS = 6
 EVAL_EVERY_STEPS = 100
 LR = 2e-5  # cdeotte part 2's value, paired with the freezing below
 SEED = 42
-# Sized to FINISH, not to train as long as possible: a kernel still running at
-# the deadline yields nothing, because `kaggle kernels output` only serves files
-# from finished runs. 75 min of training + a final full eval lands well inside
-# the window, and the graceful stop below always writes the best checkpoint.
+# Sized to FINISH, not to train as long as possible: a kernel still running when
+# you go to collect it yields nothing, because `kaggle kernels output` only
+# serves files from finished runs. 6 epochs at the measured 6.4 s/step is ~3.0 h,
+# so this budget is slack, not a guillotine -- and the graceful stop below always
+# writes the best checkpoint plus result_summary.txt regardless.
 TIME_BUDGET_S = 4 * 3600  # session cap is 6h
 # In-training evals score a fixed 500-row T1 subset, not all 1,500: a full eval
 # costs ~2.6 min (base) / ~5.2 min (large), so evaluating in full every 100
@@ -174,10 +201,14 @@ def logits_to_ranked_labels(logits: np.ndarray, k: int = 3) -> list[list[str]]:
 
 def evaluate(model, tokenizer, df, collator, device):
     model.eval()
+    # Eval under autocast too, so the scored numbers come from the same numeric
+    # path as training and the reported MAP@3 matches what the checkpoint does.
     ds = MultipleChoiceDataset(df, tokenizer, max_length=MAX_LENGTH, context_col="context")
     loader = DataLoader(ds, batch_size=EVAL_BATCH_SIZE, shuffle=False, collate_fn=collator)
     all_logits = []
-    with torch.no_grad():
+    amp = torch.autocast("cuda", dtype=torch.float16) if device.type == "cuda" \
+        else torch.autocast("cpu", enabled=False)
+    with torch.no_grad(), amp:
         for batch in loader:
             batch = {k: v.to(device) for k, v in batch.items()}
             all_logits.append(model(**batch).logits.float().cpu().numpy())
@@ -262,7 +293,9 @@ def main() -> None:
                                       max_length=MAX_LENGTH, context_col="context"),
                 batch_size=BATCH_SIZE, shuffle=False, collate_fn=collator)
             pb = {k: v.to(device) for k, v in next(iter(probe)).items()}
-            model(**pb).loss.backward()
+            with torch.autocast("cuda", dtype=torch.float16, enabled=(device.type == "cuda")):
+                probe_loss = model(**pb).loss
+            probe_loss.backward()
             model.zero_grad(set_to_none=True)
             if device.type == "cuda":
                 torch.cuda.empty_cache()
@@ -288,6 +321,15 @@ def main() -> None:
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad], lr=LR, eps=1e-6, weight_decay=0.01
     )
+    # PROPER mixed precision, which is the point of this whole run: fp32 MASTER
+    # weights (so AdamW's ~lr-sized updates are representable -- see the dtype
+    # note above) with fp16 COMPUTE (so activation memory and speed match the
+    # old broken run, and batch 2 x 384 still fits a 16 GB T4). Loading fp32 and
+    # training without autocast would roughly double activation memory and risk
+    # OOM; loading fp16 makes the optimizer a no-op. Both halves are required.
+    # autocast also keeps LayerNorm in fp32 automatically, which matters here:
+    # deberta-v3's layer_norm_eps=1e-7 is a known fp16 NaN source on Turing.
+    scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
     num_optim_steps = (len(train_loader) // GRAD_ACCUM_STEPS) * EPOCHS
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=int(0.06 * num_optim_steps), num_training_steps=num_optim_steps
@@ -310,14 +352,19 @@ def main() -> None:
         optimizer.zero_grad()
         for step, batch in enumerate(train_loader):
             batch = {k: v.to(device) for k, v in batch.items()}
-            loss = model(**batch).loss
+            with torch.autocast("cuda", dtype=torch.float16, enabled=(device.type == "cuda")):
+                loss = model(**batch).loss
             if not torch.isfinite(loss):
                 raise RuntimeError(f"non-finite loss at epoch {epoch + 1} step {step}")
-            (loss / GRAD_ACCUM_STEPS).backward()
+            scaler.scale(loss / GRAD_ACCUM_STEPS).backward()
             recent_losses.append(loss.item())
             if (step + 1) % GRAD_ACCUM_STEPS == 0:
+                # unscale before clipping, or the clip threshold is applied to
+                # scaled gradients and effectively does nothing.
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
+                scaler.step(optimizer)   # skips the step if grads are inf/nan
+                scaler.update()
                 scheduler.step()
                 optimizer.zero_grad()
                 optim_step += 1
@@ -327,7 +374,7 @@ def main() -> None:
                     recent_losses = []
                     print(
                         f"ep{epoch + 1} step {optim_step}/{num_optim_steps} "
-                        f"train_loss {loss_mean:.4f} (random {RANDOM_LOSS:.4f}) "
+                        f"train_loss {loss_mean:.4f} (random {RANDOM_LOSS:.4f}, must FALL below it) "
                         f"T1sub MAP@3 {mean:.4f} [{lo:.4f},{hi:.4f}] base {baseline:.4f} "
                         f"[{time.time() - train_start:.0f}s]",
                         flush=True,
