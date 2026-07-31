@@ -30,6 +30,28 @@ negative. `train_loss` pinned at ln(num_options) was in every run's log from the
 first day and is decisive on its own — a model with 77.2M trainable parameters
 cannot fail to reduce *training* loss on 4,586 rows over four epochs.
 
+> **Second cause, found 2026-07-31 (supersedes the note above as a complete
+> explanation).** Fixing the fp16 dtype did NOT make training work. The other
+> cause is the learning rate, and it is an *interaction* with the layer freezing.
+> Measured on the full 4,586-row pool, deberta-v3-base, 150 optimizer steps, one
+> variable per cell:
+>
+> | | freeze 9/12 | freeze 0/12 |
+> |---|---|---|
+> | **lr 2e-5** | 1.6111 → 1.6117 null | 1.6112 → 1.5947 null |
+> | **lr 1e-4** | 1.6116 → **1.4372 learns** | 1.6113 → 1.6129 null |
+>
+> Exactly one corner of four learns: the frozen lower layers are what make the
+> higher LR usable, and the recipe inherited from cdeotte part 2 sat at the worst
+> corner. `lr=2e-5` was used there on ~60k rows with 5.6× more trainable
+> parameters and was never re-measured here.
+>
+> The two causes share one signature — `train_loss` pinned at ln(5) with healthy
+> gradients — which is why fixing one produced no visible change. That is the
+> generalisable trap, not either bug individually.
+
+
+
 
 Grounded in what was actually found this session, not a generic checklist.
 
