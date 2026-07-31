@@ -1701,4 +1701,124 @@ cannot run the kernel's own config — the fp32 arms above ran at maxlen 128–2
 
 ---
 
+## Day 4 — hypothesis six, and why the fp16 fix looked like a failure
+
+The fp16 diagnosis in the previous entry was correct and did not fix the run. That
+sentence is the whole entry, and unpicking it is more useful than either fact
+alone.
+
+### What happened
+
+The rerun confirmed `param dtype: ['torch.float32']` and then did this:
+
+    ep1 step 100  train_loss 1.6254   MAP@3 0.3560 [0.3240,0.3887]
+    ep1 step 200  train_loss 1.6266   MAP@3 0.3670 [0.3330,0.4010]
+    ep2 step 300  train_loss 1.6180   MAP@3 0.3963 [0.3627,0.4297]
+    ep2 step 400  train_loss 1.6170   MAP@3 0.3917 [0.3577,0.4253]
+
+Loss *above* ln(5)=1.6094, every MAP@3 CI containing the 0.3667 baseline. Compare
+the fp16 run at the same point — 1.6164, 1.6140, 1.6138 — and the dynamics are
+indistinguishable. The fix took and changed nothing.
+
+### The 2x2 that resolved it
+
+`scripts/sweep_lr_freeze_local.py`, on deberta-v3-base so all four arms run in ~11
+minutes locally with no Kaggle quota. 1,024 source-matched rows, 150 optimizer
+steps, same seed, fp32 + autocast throughout. Only lr and freezing depth vary:
+
+| | freeze 9/12 (22.2M trainable) | freeze 0/12 (184.4M) |
+|---|---|---|
+| **lr 2e-5** | 1.6091 -> 1.6093  (+0.0002) **null** | 1.6090 -> 1.5677  (-0.0413) null, slow |
+| **lr 1e-4** | 1.6102 -> **1.4382**  (-0.1720) **LEARNS** | 1.6101 -> 1.6122  (+0.0021) null, **worst** |
+
+Exactly one corner of four learns. This is an interaction, not two additive
+effects: both single-knob changes fail, and the fully-unfrozen high-LR corner is
+*worse than the recipe we started with*. The frozen lower layers are what make the
+higher LR usable — remove that stabiliser and the features drift underneath the
+freshly-initialised head faster than it can track them. That is the standard
+gradual-unfreezing argument, arrived at here by measurement rather than citation.
+
+The methodological point is the one I want to keep. **Testing one knob at a time —
+the obvious, cheaper design — would have measured the unfrozen arm at +0.0021 and
+concluded the learning rate does not help either.** Two one-dimensional sweeps
+would have produced two nulls and sent me looking for a seventh hypothesis. The
+2x2 cost four arms instead of three and was the only design that could see it.
+
+### Where lr=2e-5 came from
+
+`LR = 2e-5  # cdeotte part 2's value, paired with the freezing below`
+
+That comment has been in the file since day 2. cdeotte used 2e-5 on ~60k rows
+with a 435M model; we used it on 4,586 rows with 77.2M trainable parameters —
+13x less data, 5.6x fewer trainable parameters. The recipe was transplanted
+without checking whether the conditions it was tuned under still held.
+
+CLAUDE.md already forbids this: *"Numbers come from measurement, not intuition.
+Every threshold, hyperparameter default, or 'expected ~X' claim ... must trace to
+a run in experiments/log.csv."* I wrote that rule and then spent three days
+debugging around a value that violated it.
+
+Worse, and this is the part worth generalising: **the citation is what protected
+it.** A bare `LR = 2e-5` is a magic number and invites scrutiny. `LR = 2e-5  #
+cdeotte part 2's value` reads as sourced, considered, already justified — so every
+time I re-read the file looking for the bug, that line looked like the *answer* to
+a question rather than a question. A provenance comment made a wrong number harder
+to see than no comment would have.
+
+### Two mechanisms, one signature
+
+fp16 parameters and too-low LR both produce: train_loss pinned at ln(num_options),
+gradients healthy, optimizer covering the right parameters, weights nominally
+updating, MAP@3 at baseline. Indistinguishable from outside.
+
+That is why fixing fp16 read as *failure* rather than *progress*, and why I
+briefly framed hypothesis 5 as "verified but wrong". It was neither wrong nor
+sufficient. When two independent faults share a signature, fixing one produces no
+observable change, and the natural inference — "my diagnosis was mistaken" — is
+itself mistaken. The defence is to verify a fix against the *mechanism* it
+addresses (the paired 16-row test: 1.5687 fp16 vs 0.1013 fp32, one variable) and
+not to require that the end-to-end symptom clear.
+
+### Corrections made during this session, kept visible
+
+- I called the unfrozen low-LR arm a clean null off its first three readings; it
+  descended monotonically from step 75 to 1.5677. Freezing is implicated, not
+  exonerated, which is why the large-model confirmation carries a freeze arm.
+- I over-read the 16-row fp32 overfit (loss 0.1013) as evidence the recipe could
+  learn. Memorising 16 rows at maxlen 128 mostly exercises the fresh head. It
+  showed updates survive rounding — nothing about learning the task.
+- My step-rate estimate for the rerun was 6.4 s/step; actual was 9.5 s/step, so
+  the 6-epoch plan would have been guillotined near step 1,500 with the LR
+  schedule unfinished. Sized from a measurement and still wrong by 48%.
+- `paired_bootstrap(a, b)` returns `mean(b - a)`; I labelled a printed delta
+  "cdeotte - ours" when the call computed the reverse. Numbers unaffected, sign
+  label backwards.
+
+### Ruled out and logged along the way, so they are not re-litigated
+
+- **Tokenizer.** `microsoft/deberta-v3-base`, `-large`, and mgoksu's checkpoint all
+  give `DebertaV2Tokenizer`, vocab 128000, identical token sequences, zero UNK.
+  Worth 20 seconds because it was a category nothing had touched.
+- **Our retrieval vs cdeotte's**, paired on the same 4,585 rows: answer-support
+  recall@5 0.6183 [0.5800,0.6567] vs 0.6667 [0.6283,0.7050], paired delta
+  -0.0483 [-0.0800,-0.0167]. Resolved — ours is genuinely worse — but 4.8 points
+  of recall cannot explain 0.6086 -> 0.39, so it was recorded and *not* promoted
+  to a diagnosis. Noting a real, resolved, insufficient effect without letting it
+  become the story is the discipline that hypotheses 1-4 lacked.
+
+### Next, and the standing rule that survives
+
+`notebooks/kaggle/lr-confirm-large/`: 4 arms x 100 steps (~70 min) at the real
+config, because base is not large and deberta-v3-large is documented as fragile to
+fine-tune — a 5x LR that helps 12 layers can destabilise 24. It writes
+`result_summary.txt` after every arm, so a session-cap kill still leaves the
+finished arms harvestable.
+
+Pre-declared: if no arm learns on large while 1e-4 clearly learns on base, stop
+buying quota for LR variants, report it, and consider making base the headline
+reader. Writing the give-up condition down before the run is the only reliable
+defence against a seventh hypothesis.
+
+---
+
 <!-- Append new entries above this line as work continues. -->
