@@ -8,8 +8,9 @@ and 5th place needed 70B models to do marginally better.
 
 **What this repo is actually for:** measuring *where the score comes from*,
 with honest statistics — not chasing a leaderboard number. The most useful
-output turned out to be an attribution result that falsified three of my own
-successive hypotheses.
+output turned out to be an attribution result, and a three-day debugging trail
+that falsified four of my own successive hypotheses before measurement found the
+two real causes.
 
 ---
 
@@ -22,12 +23,27 @@ successive hypotheses.
 > **The finding that matters more than the score:** holding the retrieved
 > context *fixed* and swapping only the reader moves MAP@3 from **0.3840**
 > (mine) to **0.8600** (a public 2023 checkpoint) on the same clean 200-row
-> holdout. The retrieval was never the bottleneck. The reader path was — and
-> the specific cause turned out to be a **train/eval distribution mismatch I
-> introduced myself**, not model size, corpus scope, or training volume.
+> holdout. The retrieval was never the bottleneck — the reader *training* was.
 
 That comparison is the project: it localises the failure to one component by
-changing exactly one thing.
+changing exactly one thing. What it cost to find the cause is the rest of it.
+
+**Six hypotheses, four wrong.** Every training run in this repo pinned
+`train_loss` at exactly `ln(5) = 1.6094` — the cross-entropy of predicting
+uniformly — while gradients, the optimizer, the labels, the retrieved context and
+the input format were all measurably healthy. I blamed the data four times in a
+row. The real causes were **two borrowed constants**, and they shared one
+signature, which is why fixing the first looked like a failure:
+
+| | cause | how it hid |
+|---|---|---|
+| 1 | **fp16 parameters** — `transformers` 5.x follows the *checkpoint's* dtype, and `deberta-v3` ships fp16, so AdamW updated half-precision weights in place. At lr=2e-5 an update is ~1.3 ULP near a weight of 0.03 and **exactly zero for any weight ≥ 0.1**. | `transformers>=4.46`, unpinned |
+| 2 | **lr=2e-5 × freeze 18/24** — inherited from a public notebook that used it on ~60k rows with 5.6× more trainable parameters. A 2×2 showed **exactly one corner of four learns**, because the frozen lower layers are what make a higher LR usable. | `LR = 2e-5  # cdeotte part 2's value` |
+
+The second is the one I'd want to be asked about. A bare magic number invites
+scrutiny; the same number with a provenance comment reads as *already justified*,
+so it looked like an answer rather than a question every time I re-read the file.
+Full narrative in `DEVLOG.md`; every measurement in `experiments/log.csv`.
 
 ## Results
 
@@ -44,12 +60,22 @@ common error in public writeups. Every number carries a 95% bootstrap CI.
 | 3 | open-book, my BM25 + general Wikipedia, `deberta-v3-large`, frozen-layer recipe, 600 steps | 0.3807 | [0.3618, 0.3997] | **No** |
 | 4 | same, **3.3× the training steps** (~2,000, 5 h) | 0.3840 | [0.3649, 0.4036] | **No** |
 | 5 | same on `deberta-v3-base`, `max_length=512`, 2 epochs | 0.3746 | [0.3558, 0.3937] | **No** |
-| 6 | **source-matched** slice (4,586 rows), cdeotte's context — *the best own-model result* | **0.6086** | [0.5880, 0.6291] | Yes |
+| 6 | **source-matched** slice (4,586 rows), cdeotte's context — best of the invalid runs | 0.6086 | [0.5880, 0.6291] | Yes |
 
-Rows 3→5 are the informative failure: **tripling the optimizer steps changed
-nothing** (0.3807 → 0.3840), which falsified "undertrained" as the explanation.
-Row 6 is why — it is the only own-model run whose training data was drawn from
-the same generator as the eval set.
+> ⚠️ **Rows 2–6 are invalid as measurements of their stated recipes.** Every one
+> trained fp16 *parameters* at a learning rate later measured to be incapable of
+> learning. They record a frozen encoder with a partly-trainable head — the small
+> head weights are the one magnitude regime where fp16 still moves — so read them
+> as floors, not results. Rows 0, 1 and the retrieval numbers are unaffected, as
+> is the leaderboard score (fp16 *inference* is correct and cheaper).
+
+Rows 3→5 are still informative as a *falsification*: **tripling the optimizer
+steps changed nothing** (0.3807 → 0.3840), which killed "undertrained" as the
+explanation. I then attributed row 6's 0.6086 to source-matched training data —
+that was hypothesis 4, and it is also wrong. A known-good reader scores 0.8037 on
+my *training* file versus 0.7970 on the eval file, so the two are equally readable
+and generator shift was never a mechanism. Row 6 was simply the run whose
+conditions let the head learn most before fp16 rounding stalled it.
 
 ### On the Kaggle leaderboard
 
@@ -99,12 +125,16 @@ known-good public reader *is* one. Hold retrieval fixed, vary only the reader:
 | Reader, on T1 with **my** retrieved context | MAP@3 | 95% CI |
 |---|---|---|
 | known-good public checkpoint | **0.7970** | [0.7687, 0.8247] |
-| my trained reader | **0.3840** | [0.3649, 0.4036] |
-| **reader-attributable loss** | **0.4130** | — |
+| my trained reader *(both faults present — see below)* | 0.3840 | [0.3649, 0.4036] |
+| gap | 0.4130 | — |
 
-So ~41 MAP@3 points sit in reader training alone, and everything above 0.7970 is
-what better retrieval could add. That is an exact split, not an impression, and
-it is the number that should have driven every decision from day 2 onward.
+**That 0.4130 was labelled "reader-attributable loss" and it was mislabelled.** It
+quantifies two bugs, not a training gap: my reader was training fp16 *parameters*
+at an inherited learning rate that measurement later showed cannot learn at all.
+It is retained rather than deleted because the mislabelling is the instructive
+part — a real, correctly-computed number can still answer the wrong question, and
+"reader-attributable" smuggled in a causal claim the measurement never supported.
+The genuine split is being re-measured with a reader that actually trains.
 
 The same reader scores 0.8600 on the official 200 with the same retrieval, so
 T1 is *modestly* harder than the gold set — not a broken eval. I had floated
@@ -113,7 +143,7 @@ before measuring it; it was a comfortable story and it was mostly wrong.
 
 ### The pre-flight gate (`scripts/hypothesis_gate.py`)
 
-The generalizable lesson from three wrong hypotheses. The move is an inversion:
+The generalizable lesson from six hypotheses, four of them wrong. The move is an inversion:
 **use a known-good model as an instrument to test your data, not as a score to
 chase.** Scores well → the data is learnable, the failure is yours to fix by
 training. Scores badly → the data is the problem and no training run can help.
