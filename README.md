@@ -98,6 +98,33 @@ benchmark's artifact mattered more than any single score.
 Row 3 is the uncomfortable one: my best-engineered pipeline is **worse than
 row 2's closed-book model and worse than row 1's heuristic.**
 
+### Valid own-model results (both faults fixed)
+
+The recipe below is the first in this project where every constant traces to a
+measurement in `experiments/log.csv` rather than to a source notebook:
+`dtype=torch.float32` + fp16 autocast, **lr=1e-4**, freeze embeddings + 75% of
+layers, effective batch 16, maxlen 384.
+
+| What | MAP@3 (T1) | Notes |
+|---|---|---|
+| random baseline | 0.3667 | analytic |
+| `deberta-v3-base`, measured recipe, 4,586 rows | **~0.669** | *in progress — full-1,500 rescore pending* |
+| `deberta-v3-large`, **same recipe** | **0.3639** [0.3217, 0.4072] | **does not train** — 282 steps at full LR, never leaves ln(5) |
+| known-good public reader (ceiling) | 0.7970 [0.7687, 0.8247] | same eval set, same retrieval |
+
+**The 435M model does not train under this compute budget and the 184M one
+does.** That is measured, not assumed: identical pool, identical recipe, identical
+freezing fraction (18/24 = 9/12 = 75%), and large had 282 steps at full learning
+rate while base broke away within ~60. `PLAN.md` predicted `deberta-v3-large`
+would be the workhorse — it reached top-5 in the real competition — and the
+measurement says otherwise for *my* budget. Building the eval harness before the
+training runs is what made that visible instead of a mystery.
+
+So `deberta-v3-base` is the headline reader. It sharpens the project's thesis
+rather than conceding it: the original claim was *retrieval quality beats
+parameter count*, and this is a harder version — a 184M reader that trains beats
+a 435M one that doesn't.
+
 ### Not mine (reference anchor — separated deliberately)
 
 | # | What | MAP@3 | 95% CI | Tier |
