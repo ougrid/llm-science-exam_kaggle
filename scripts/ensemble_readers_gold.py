@@ -65,10 +65,10 @@ RRF_K = 60
 WEIGHTS = [0.0, 0.2, 0.3, 0.4, 0.5]  # weight on MY reader; 0.0 == public alone
 
 
-def logits_for(ckpt: Path, df, layout: str, device) -> np.ndarray:
+def logits_for(ckpt: Path, df, layout: str, device, tokenizer=None) -> np.ndarray:
     from transformers import AutoModelForMultipleChoice, AutoTokenizer
 
-    tok = AutoTokenizer.from_pretrained(ckpt)
+    tok = AutoTokenizer.from_pretrained(tokenizer or ckpt)
     model = AutoModelForMultipleChoice.from_pretrained(ckpt, dtype=torch.float32).to(device).eval()
 
     class DS(Dataset):
@@ -125,7 +125,15 @@ def ap(scores: np.ndarray, answers) -> np.ndarray:
 
 def main() -> None:
     ap_ = argparse.ArgumentParser()
-    ap_.add_argument("--mine", default=str(MINE))
+    ap_.add_argument("--mine", default=str(MINE),
+                     help="second reader to fuse with the public one")
+    # sandiago21's checkpoint has no tokenizer files (config + weights only), so it
+    # needs the base tokenizer. Its training layout is the same "context #### prompt"
+    # / option recipe as mgoksu's, both being forks of cdeotte's part-2 notebook.
+    ap_.add_argument("--mine-layout", default="ours", choices=["ours", "public"],
+                     help="'public' for another cdeotte-lineage checkpoint")
+    ap_.add_argument("--mine-tokenizer", default=None,
+                     help="fallback tokenizer when the checkpoint ships none")
     args = ap_.parse_args()
     mine = Path(args.mine)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -139,11 +147,11 @@ def main() -> None:
     print(f"clean gold {len(df)} rows, our retrieval | baseline {BASELINE:.4f}")
 
     lg_pub = logits_for(PUBLIC, df, "public", device)
-    lg_mine = logits_for(mine, df, "ours", device)
+    lg_mine = logits_for(mine, df, args.mine_layout, device, args.mine_tokenizer)
 
     s_pub = ap(lg_pub, answers)
     s_mine = ap(lg_mine, answers)
-    for tag, s in (("public reader alone", s_pub), ("my reader alone", s_mine)):
+    for tag, s in ((f"{PUBLIC.name} alone", s_pub), (f"{mine.name} alone", s_mine)):
         m, lo, hi = bootstrap_ci(s, n_resamples=10_000, seed=0)
         print(f"  {tag:22s} MAP@3 {m:.4f} [{lo:.4f},{hi:.4f}]")
 
@@ -157,14 +165,14 @@ def main() -> None:
     rescue = int(((top_pub != gold) & (top_mine == gold)).sum())
     break_ = int(((top_pub == gold) & (top_mine != gold)).sum())
     print(f"\n  top-1 disagreement: {disagree:.3f} of rows")
-    print(f"  rows my reader gets right and public gets WRONG: {rescue}")
-    print(f"  rows public gets right and mine gets wrong:      {break_}")
+    print(f"  rows reader B gets right and reader A gets WRONG: {rescue}")
+    print(f"  rows reader A gets right and B gets wrong:        {break_}")
     if rescue == 0:
         print("  => no complementary signal at all; an ensemble cannot help. Stop here.")
 
     zp, zm = zscore(lg_pub), zscore(lg_mine)
     results = {}
-    print("\n  z-normalised logit average (weight on MY reader):")
+    print("\n  z-normalised logit average (weight on reader B):")
     for w in WEIGHTS:
         s = ap((1 - w) * zp + w * zm, answers)
         m, lo, hi = bootstrap_ci(s, n_resamples=10_000, seed=0)
