@@ -26,15 +26,35 @@ the real recipe (maxlen 384, batch 2 x accum 8, freeze 18/24, fp32 + autocast,
 6% warmup) except the LR, and each gets STEPS_PER_ARM optimizer steps -- enough
 that the base model's separation (visible by step 75) would show.
 
+ATTEMPT 2. The first attempt ran four arms at 100 steps each and returned three
+nulls (lr2e-5 1.6125, lr1e-4 1.6154, lr5e-5 1.6166) before OOMing on the fourth.
+Both of those outcomes were my errors, not findings about large:
+
+  * The OOM was a leak. `del model, opt` left `sched` and `scaler` holding
+    references to the optimizer, so AdamW's exp_avg/exp_avg_sq were retained on
+    every arm and accumulated to 14.55 of 14.56 GiB. Fixed below.
+  * 100 steps was too few to conclude anything. Re-measured afterwards on the
+    FULL 4,586-row pool with no row repetition, base's winning arm went:
+    step 100 -> 1.6084 (flat), step 125 -> 1.5431, step 150 -> 1.4372. The first
+    attempt stopped every arm at exactly the step where base was still flat.
+
+So the pre-declared "no arm learns on large => switch the headline reader to base"
+branch did fire on attempt 1, and invoking it would have been wrong: the branch
+assumed base and large were compared in the same regime, and they were not (base
+had run 2.34 epochs over a repeated 1,024-row sample, large 0.35 epochs over
+4,586 distinct rows). Following a pre-declared rule whose premise has been
+invalidated is not discipline. The rule gets re-run under a fair comparison.
+
 READ IT LIKE THIS, declared before running:
-  * An arm whose train_loss falls clearly below ln(5) and keeps falling wins.
-  * If 1e-4 diverges or NaNs on large while 2e-5 stays flat, that is the
-    large-specific instability, and the answer is an intermediate LR (5e-5) or
-    a lower LR on the encoder with a higher one on the fresh head -- NOT another
-    full run at 1e-4.
-  * If NO arm learns on large while 1e-4 clearly learns on base, then something
-    is specific to the large checkpoint and the honest move is to report that and
-    switch the headline reader to base rather than keep buying quota.
+  * An arm whose train_loss falls clearly below ln(5) and keeps falling wins ->
+    launch the full run at that LR.
+  * If 1e-4 diverges or NaNs while 5e-5 learns, that is the documented
+    large-model instability and 5e-5 is the answer.
+  * If NEITHER arm has moved by step 300 -- 2.4x the margin base needed on the
+    same data -- then the finding is real and specific to the large checkpoint.
+    At that point report it and make deberta-v3-base the headline reader rather
+    than buying more quota. base at 1.4372 is a working reader; large at ln(5) is
+    not, and a 184M-parameter reader that trains beats a 435M one that does not.
 
 The MAP@3 at the end of each arm is a sanity read on a fixed 300-row T1 subset,
 not a result: 300 rows gives a 95% CI half-width around +-0.055, so it cannot
@@ -43,6 +63,7 @@ resolve anything small. train_loss is the signal here.
 
 from __future__ import annotations
 
+import gc
 import math
 import time
 from dataclasses import dataclass
@@ -219,8 +240,20 @@ def write_summary(path, best, final, best_step, n_train, train_seconds, stopped_
 
 
 # --- confirmation-run knobs -------------------------------------------------
-STEPS_PER_ARM = 100          # ~16 min/arm at the measured 9.5 s/step; 4 arms ~= 70 min
+# Measured on the FULL 4,586-row pool (deberta-v3-base, no row repetition), the
+# winning arm's trace was:
+#     step 100 -> 1.6084   (still flat; indistinguishable from a null)
+#     step 125 -> 1.5431   (breaks away)
+#     step 150 -> 1.4372
+# The first large attempt stopped every arm at exactly 100 steps, i.e. at or just
+# before the point where base needed to keep going. Its three nulls are therefore
+# consistent with "stopped too early" and cannot be read as "1e-4 fails on large".
+# 300 steps gives 2.4x the margin base needed, which matters because large is 2x
+# the depth and separation may come later still.
+STEPS_PER_ARM = 300          # ~48 min/arm at the measured 9.5 s/step
 EVAL_ROWS = 300              # sanity only; +-0.055 CI half-width, not a result
+SECONDS_PER_STEP_EST = 9.5   # measured on the day4 rerun; used only for budgeting
+EVAL_OVERHEAD_S = 240        # 300-row eval + model load
 LOG_EVERY = 20
 # (label, lr). Ordered cheapest-risk first so a NaN in a later arm still leaves
 # earlier results on disk -- each arm writes its summary as soon as it finishes.
@@ -232,11 +265,17 @@ LOG_EVERY = 20
 # So the arms below vary LR at the kernel's freezing depth, then test whether
 # less freezing compounds with the higher LR. 18/24 on large is the same 75% as
 # 9/12 on base; 12/24 halves it.
+# Ordered MOST IMPORTANT FIRST. Each arm writes result_summary.txt the moment it
+# finishes, so if the session is cut or a later arm OOMs, the arm that actually
+# decides the next step is already on disk. That is why the first attempt still
+# yielded three usable arms despite crashing.
+# Dropped from the first attempt: lr2e-5 freeze18/24 (already measured null at 100
+# steps -- re-running the control costs 48 min to re-learn something we know) and
+# lr1e-4 freeze12/24 (base measured LESS freezing as strictly worse: 1.6129 vs
+# 1.4372 at the same LR, so it is not a candidate and it was the OOM victim).
 ARMS = [
-    ("lr2e-5 freeze18/24 (inherited; the null on base)", 2e-5, 18),
-    ("lr1e-4 freeze18/24 (base winner)", 1e-4, 18),
-    ("lr5e-5 freeze18/24 (midpoint; insurance vs large instability)", 5e-5, 18),
-    ("lr1e-4 freeze12/24 (do the two knobs compound?)", 1e-4, 12),
+    ("lr1e-4 freeze18/24 (base winner; THE question)", 1e-4, 18),
+    ("lr5e-5 freeze18/24 (insurance if 1e-4 destabilises 24 layers)", 5e-5, 18),
 ]
 
 
@@ -313,9 +352,21 @@ def run_arm(label, lr, n_frozen, train_df, eval_df, tokenizer, collator, device)
               f"{mean:.4f} [{lo:.4f},{hi:.4f}] base {random_baseline_map_at_k():.4f}  -> {verdict}",
               flush=True)
         result = (label, lr, trace, (mean, lo, hi), verdict)
-    del model, opt
+    if device.type == "cuda":
+        print(f"  peak GPU: {torch.cuda.max_memory_allocated()/2**30:.2f} GiB", flush=True)
+    # Free EVERYTHING that can reach the optimizer. `del model, opt` alone is not
+    # enough and is what OOM'd arm 4 of the first attempt at 14.55/14.56 GiB:
+    # `sched` holds a reference to `opt`, and `scaler` outlives it too, so AdamW's
+    # exp_avg/exp_avg_sq tensors (2 floats per trainable parameter -- 617 MB at
+    # 77.2M params, 1.2 GB at 12 unfrozen layers) were retained on every arm and
+    # accumulated across the run.
+    del loader, sched, scaler, opt, model
+    gc.collect()
     if device.type == "cuda":
         torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        print(f"  after cleanup: {torch.cuda.memory_allocated()/2**30:.2f} GiB still allocated",
+              flush=True)
     return result
 
 
@@ -334,7 +385,16 @@ def main() -> None:
     collator = DataCollatorForMultipleChoice(tokenizer)
 
     results = []
+    t_start = time.time()
     for label, lr, n_frozen in ARMS:
+        # Never start an arm that cannot finish: a kernel killed mid-arm loses that
+        # arm entirely, and `kaggle kernels output` only serves finished runs.
+        est = STEPS_PER_ARM * SECONDS_PER_STEP_EST + EVAL_OVERHEAD_S
+        if time.time() - t_start + est > TIME_BUDGET_S:
+            print(f"\nSKIPPING '{label}': {est/60:.0f} min needed, "
+                  f"{(TIME_BUDGET_S - (time.time() - t_start))/60:.0f} min left in budget",
+                  flush=True)
+            continue
         results.append(
             run_arm(label, lr, n_frozen, train_df, eval_df, tokenizer, collator, device)
         )
