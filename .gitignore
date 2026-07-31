@@ -40,3 +40,4 @@ notebooks/kaggle/*-data/*
 !notebooks/kaggle/*-data/dataset-metadata.json
 *.npy
 *.whl
+data/checkpoints/
